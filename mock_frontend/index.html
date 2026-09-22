@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ARGUS · Mobile Urban Intelligence Platform</title>
+    <meta
+      name="description"
+      content="3D urban telemetry visualiser - public transport fleet as a mobile urban sensing network. Illustrative mock-up for SIH 2026 PS 26124."
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/src/ui/styles.css" />
+  </head>
+  <body>
+    <!-- WebGL canvas is appended here by core/viewer.js -->
+    <div id="scene"></div>
+
+    <!-- Overlay chrome. Populated by the ui/* modules so structure lives
+         beside the behaviour that owns it. -->
+    <div id="ui">
+      <header id="topbar" class="panel"></header>
+      <div id="stage">
+        <div id="left"></div>
+        <div id="right"></div>
+      </div>
+    </div>
+
+    <div id="hints">
+      <span><kbd>drag</kbd> orbit</span>
+      <span><kbd>scroll</kbd> zoom</span>
+      <span><kbd>click</kbd> a marker</span>
+      <span><kbd>space</kbd> pause</span>
+      <span><kbd>R</kbd> reset view</span>
+      <span><kbd>B</kbd> bloom</span>
+    </div>
+
+    <div id="disclaimer">
+      Illustrative mock-up &middot; synthetic telemetry &middot; SIH 2026 &middot; PS 26124
+    </div>
+
+    <div id="tooltip"></div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

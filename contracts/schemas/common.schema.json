@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://argus.sih/schemas/common.schema.json",
+  "title": "ARGUS shared definitions",
+  "$defs": {
+    "SchemaVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "SemVer of the contract. Consumers MUST reject a major they do not know."
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC with millisecond precision. Edge clocks are NTP-disciplined; see docs/03."
+    },
+    "DeviceId": {
+      "type": "string",
+      "pattern": "^[A-Z0-9-]{4,32}$",
+      "description": "Stable identity of the edge unit, not the bus. A unit can be moved between buses."
+    },
+    "CameraId": {
+      "type": "string",
+      "enum": ["front", "rear", "left", "right", "cabin"]
+    },
+    "Confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Calibrated probability, not a raw softmax score. See docs/03 on temperature scaling."
+    },
+    "GeoPoint": {
+      "type": "object",
+      "required": ["lat", "lon", "accuracy_m", "source"],
+      "properties": {
+        "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+        "lon": { "type": "number", "minimum": -180, "maximum": 180 },
+        "accuracy_m": {
+          "type": "number",
+          "minimum": 0,
+          "description": "1-sigma horizontal error. Drives inverse-variance weighting during fusion."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["gnss", "gnss+ipm", "gnss+ipm+mapmatch", "dead-reckoning"],
+          "description": "gnss alone = the bus's position. +ipm = the detection's own ground position."
+        }
+      }
+    },
+    "MapMatch": {
+      "type": "object",
+      "description": "Result of snapping a GeoPoint onto the OSM road graph. The spatial key for every rollup.",
+      "required": ["segment_id", "offset_m", "confidence"],
+      "properties": {
+        "segment_id": { "type": "string", "examples": ["osm:way/23847561:3"] },
+        "offset_m": { "type": "number", "minimum": 0, "description": "Distance along the segment from its start node." },
+        "lateral_m": { "type": "number", "description": "Signed offset from centreline. Negative = left of travel." },
+        "ward_id": { "type": "string", "examples": ["bbmp:150"] },
+        "confidence": { "$ref": "#/$defs/Confidence" }
+      }
+    },
+    "EgoState": {
+      "type": "object",
+      "description": "The bus's own motion at capture time, interpolated to the frame.",
+      "required": ["speed_kmh", "heading_deg"],
+      "properties": {
+        "speed_kmh": { "type": "number", "minimum": 0 },
+        "heading_deg": { "type": "number", "minimum": 0, "exclusiveMaximum": 360 },
+        "accel_ms2": { "type": "number" },
+        "lateral_accel_ms2": { "type": "number" }
+      }
+    },
+    "Conditions": {
+      "type": "object",
+      "description": "Capture conditions. Fusion downweights poor conditions; a night 'not-seen' is weak negative evidence.",
+      "required": ["illumination"],
+      "properties": {
+        "illumination": { "type": "string", "enum": ["day", "dusk", "night", "tunnel", "glare"] },
+        "weather": { "type": "string", "enum": ["clear", "rain", "heavy-rain", "fog", "unknown"] },
+        "occlusion": { "$ref": "#/$defs/Confidence", "description": "Fraction of the road ROI blocked by other vehicles." },
+        "motion_blur": { "$ref": "#/$defs/Confidence" }
+      }
+    },
+    "Evidence": {
+      "type": "object",
+      "description": "Pointer to the stored crop. The frame itself never travels inside the message.",
+      "required": ["uri", "sha256"],
+      "properties": {
+        "uri": { "type": "string", "examples": ["s3://argus-evidence/2026/11/04/obs-8f3a.jpg"] },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Chain of custody. Recomputed on ingest." },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "quality": { "$ref": "#/$defs/Confidence", "description": "sharpness x illumination x subject size. Picks the canonical crop during fusion." },
+        "faces_blurred": { "type": "boolean", "description": "MUST be true for any crop containing people. Enforced on-device." }
+      }
+    },
+    "ModelProvenance": {
+      "type": "object",
+      "description": "Which model produced this, on what runtime. Required to re-score history after a model upgrade.",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "examples": ["argus-road-defect"] },
+        "version": { "type": "string", "examples": ["0.4.2"] },
+        "runtime": { "type": "string", "enum": ["onnxrt-cpu", "onnxrt-cuda", "tensorrt-fp16", "tensorrt-int8", "hailo-int8", "nnapi-int8", "coreml"] },
+        "input_res": { "type": "string", "examples": ["960x544"] }
+      }
+    },
+    "SeverityBand": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "DetectionClass": {
+      "type": "string",
+      "enum": [
+        "pothole",
+        "damaged_road",
+        "waterlogging",
+        "missing_divider",
+        "damaged_divider",
+        "missing_zebra",
+        "faded_zebra",
+        "damaged_sign",
+        "missing_sign",
+        "road_debris",
+        "open_manhole",
+        "pedestrian_risk",
+        "encroachment"
+      ],
+      "description": "See docs/02-detection-taxonomy.md. Classes prefixed missing_ are NEVER emitted by the edge - they are inferred in the backend from SegmentPass negative evidence."
+    }
+  }
+}

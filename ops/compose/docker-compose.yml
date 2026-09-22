@@ -1,0 +1,84 @@
+# ARGUS local stack.
+#
+#   docker compose -f ops/compose/docker-compose.yml up -d
+#
+# Everything binds to localhost only. Nothing here is production-hardened — it exists so that
+# four people get an identical environment in one command, and so the demo machine needs no
+# manual setup on the day.
+
+name: argus
+
+services:
+  # ── PostgreSQL + PostGIS + TimescaleDB ──────────────────────────────────────
+  # PostGIS does the spatial joins (segment matching, ward containment, hexbin).
+  # Timescale does the hypertables and — the feature that actually matters —
+  # continuous aggregates, which pre-compute the 15-minute congestion rollups
+  # incrementally. Scanning raw segment_passes per request does not survive a
+  # live demo, let alone a fleet.
+  db:
+    image: timescale/timescaledb-ha:pg16
+    environment:
+      POSTGRES_USER: argus
+      POSTGRES_PASSWORD: argus
+      POSTGRES_DB: argus
+    ports: ["127.0.0.1:5432:5432"]
+    volumes:
+      - ../volumes/db:/home/postgres/pgdata/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U argus"]
+      interval: 5s
+      retries: 20
+
+  # ── MQTT broker ─────────────────────────────────────────────────────────────
+  # The fleet uplink. Designed for exactly our conditions: intermittent cellular,
+  # small messages, QoS tiers, retained state. HTTP polling from 6,400 buses is
+  # not a plan.
+  #
+  # TLS + per-device X.509 is configured in ops/mosquitto/ for anything beyond
+  # local dev — a bus is a physically accessible box in a public depot, so device
+  # identity is a revocable certificate, never a shared API key.
+  broker:
+    image: emqx/emqx:5
+    ports:
+      - "127.0.0.1:1883:1883"    # MQTT
+      - "127.0.0.1:8883:8883"    # MQTT over TLS
+      - "127.0.0.1:18083:18083"  # dashboard — admin/public
+    volumes:
+      - ../volumes/emqx:/opt/emqx/data
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  # Fusion→API notification and the pub/sub that fans assets out to every
+  # connected dashboard over WebSocket.
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:6379:6379"]
+    command: ["redis-server", "--appendonly", "no"]
+
+  # ── Object storage ──────────────────────────────────────────────────────────
+  # Evidence crops and incident clips. S3-compatible, so production can swap in
+  # any S3 endpoint without a code change.
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: argus
+      MINIO_ROOT_PASSWORD: argusargus
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - ../volumes/minio:/data
+
+  # ── Self-hosted basemap tiles ───────────────────────────────────────────────
+  # A pmtiles extract of the Bengaluru bbox. Self-hosted deliberately: no
+  # external tile requests, no rate limit at the worst possible moment, no
+  # dependence on venue wifi.
+  #
+  #   ops/../frontend/scripts/extract-pmtiles.sh   generates the extract
+  tiles:
+    image: protomaps/go-pmtiles:latest
+    command: serve /data --cors="*"
+    ports: ["127.0.0.1:8080:8080"]
+    volumes:
+      - ../volumes/tiles:/data

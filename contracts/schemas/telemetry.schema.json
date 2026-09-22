@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://argus.sih/schemas/telemetry.schema.json",
+  "title": "Telemetry",
+  "description": "Edge-unit heartbeat, emitted every 5 s. Drives the live fleet view (buses moving on the 3D map), the fleet-health panel, and the bandwidth KPIs. Deliberately small: at 5 s cadence across a 6,400-bus fleet this is the highest-frequency message in the system, so every field has to earn its bytes. MQTT topic: argus/v1/{fleet}/{device_id}/tlm (QoS 0, retained)",
+  "type": "object",
+  "required": ["schema_version", "device_id", "at", "geo", "health"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.schema.json#/$defs/SchemaVersion" },
+    "device_id": { "$ref": "common.schema.json#/$defs/DeviceId" },
+    "bus_id": { "type": "string" },
+    "route_id": { "type": "string" },
+    "trip_id": { "type": "string" },
+    "at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "geo": { "$ref": "common.schema.json#/$defs/GeoPoint" },
+    "ego": { "$ref": "common.schema.json#/$defs/EgoState" },
+
+    "schedule": {
+      "type": "object",
+      "description": "Actual against GTFS scheduled progress. Route-delay estimation needs no computer vision at all, which is worth being explicit about.",
+      "properties": {
+        "next_stop_id": { "type": "string" },
+        "delay_s": {
+          "type": "integer",
+          "description": "Signed. Positive is late. Compared against the GTFS stop_times prediction for this trip."
+        },
+        "headway_s": {
+          "type": "integer",
+          "description": "Gap to the preceding bus on the same route. Detects bus bunching, which passengers experience as unreliability more sharply than raw lateness."
+        }
+      }
+    },
+
+    "health": {
+      "type": "object",
+      "required": ["uptime_s", "queue_depth"],
+      "description": "Operational state of the edge unit. A fleet of 6,400 units needs to be managed, and silent failure is the realistic failure mode: a camera fogs over and the bus quietly stops contributing.",
+      "properties": {
+        "uptime_s": { "type": "integer", "minimum": 0 },
+        "queue_depth": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Observations held in the store-and-forward spool. Rising depth means the uplink is degraded, not that the road got worse."
+        },
+        "queue_oldest_s": { "type": "integer", "minimum": 0 },
+        "cpu_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+        "gpu_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+        "temp_c": {
+          "type": "number",
+          "description": "SoC temperature. A sealed enclosure on a bus roof in a Bengaluru May is a real thermal-throttling risk, and throttling shows up as silently reduced inference FPS."
+        },
+        "inference_fps": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Achieved, not configured. The honest measure of whether the model fits the hardware."
+        },
+        "dropped_frames_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+        "cameras_online": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/CameraId" }
+        },
+        "camera_quality": {
+          "type": "object",
+          "description": "Per-camera blur/exposure score. Catches the lens that has been dirty for three weeks.",
+          "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "gnss_fix": { "type": "string", "enum": ["none", "2d", "3d", "dgps"] },
+        "link": { "type": "string", "enum": ["4g", "5g", "wifi-depot", "offline"] },
+        "uplink_kb_session": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Bytes sent this session. Rolls up into the fleet bandwidth figure, which is the headline evidence for edge processing."
+        }
+      }
+    },
+
+    "model": { "$ref": "common.schema.json#/$defs/ModelProvenance" }
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://argus.sih/schemas/observation.schema.json",
+  "title": "Observation",
+  "description": "ONE detection, by ONE camera, on ONE bus, at ONE instant. High volume; never rendered directly on a dashboard. Observations are fused into Assets first. MQTT topic: argus/v1/{fleet}/{device_id}/obs",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "observation_id",
+    "device_id",
+    "camera_id",
+    "class_id",
+    "captured_at",
+    "confidence",
+    "geo",
+    "conditions",
+    "model"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.schema.json#/$defs/SchemaVersion" },
+    "observation_id": { "type": "string", "format": "uuid" },
+    "device_id": { "$ref": "common.schema.json#/$defs/DeviceId" },
+    "bus_id": { "type": "string", "examples": ["KA01FA4417"] },
+    "route_id": { "type": "string", "examples": ["500D"] },
+    "trip_id": {
+      "type": "string",
+      "description": "Links to the GTFS trip so route-delay analytics can join without a lookup."
+    },
+    "segment_pass_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "The SegmentPass this detection occurred within. Joins positive evidence to negative evidence."
+    },
+    "camera_id": { "$ref": "common.schema.json#/$defs/CameraId" },
+    "class_id": { "$ref": "common.schema.json#/$defs/DetectionClass" },
+    "captured_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "uplinked_at": {
+      "$ref": "common.schema.json#/$defs/Timestamp",
+      "description": "Stamped by the edge on transmit. captured_at..uplinked_at is the uplink queue latency KPI."
+    },
+    "confidence": { "$ref": "common.schema.json#/$defs/Confidence" },
+    "geo": { "$ref": "common.schema.json#/$defs/GeoPoint" },
+    "map_match": { "$ref": "common.schema.json#/$defs/MapMatch" },
+    "ego": { "$ref": "common.schema.json#/$defs/EgoState" },
+    "geometry": {
+      "type": "object",
+      "description": "Physical extent recovered by inverse perspective mapping. Areas are ground metres, never pixels: pixel area is meaningless across viewing distances.",
+      "properties": {
+        "bbox_px": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "mask_area_m2": { "type": "number", "minimum": 0 },
+        "extent_m": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[along-road, across-road] in metres."
+        },
+        "range_m": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Ground distance from camera. Detections beyond ~25 m carry lower fusion weight."
+        }
+      }
+    },
+    "severity": {
+      "type": "object",
+      "required": ["score", "band"],
+      "properties": {
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Continuous severity derived from physical extent and class, NOT from detector confidence. A tiny pothole detected with 0.99 confidence is still low severity."
+        },
+        "band": { "$ref": "common.schema.json#/$defs/SeverityBand" }
+      }
+    },
+    "conditions": { "$ref": "common.schema.json#/$defs/Conditions" },
+    "evidence": { "$ref": "common.schema.json#/$defs/Evidence" },
+    "model": { "$ref": "common.schema.json#/$defs/ModelProvenance" }
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://argus.sih/schemas/segment-pass.schema.json",
+  "title": "SegmentPass",
+  "description": "ONE bus traversing ONE road segment, entry to exit. The keystone message of the platform. It carries (a) traffic state for the congestion heat map, (b) pedestrian counts for the crowd-density heat map, and (c) INSPECTION COVERAGE, meaning what the pipeline looked for and did not find. (c) is the system's only source of negative evidence, and it is what makes missing infrastructure detectable and work orders self-closing. MQTT topic: argus/v1/{fleet}/{device_id}/pass",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "segment_pass_id",
+    "device_id",
+    "segment_id",
+    "entered_at",
+    "exited_at",
+    "traffic",
+    "inspection",
+    "conditions"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.schema.json#/$defs/SchemaVersion" },
+    "segment_pass_id": { "type": "string", "format": "uuid" },
+    "device_id": { "$ref": "common.schema.json#/$defs/DeviceId" },
+    "bus_id": { "type": "string" },
+    "route_id": { "type": "string" },
+    "trip_id": { "type": "string" },
+    "segment_id": { "type": "string", "examples": ["osm:way/23847561:3"] },
+    "ward_id": { "type": "string", "examples": ["bbmp:150"] },
+    "direction": {
+      "type": "string",
+      "enum": ["forward", "reverse"],
+      "description": "Relative to the OSM way node order. Congestion is directional; a corridor can be jammed inbound and free outbound."
+    },
+    "entered_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "exited_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "length_m": { "type": "number", "minimum": 0 },
+
+    "traffic": {
+      "type": "object",
+      "description": "Traffic state over this pass. See docs/07 for why speed-deficit is the primary signal and CV is the explanatory layer.",
+      "required": ["mean_speed_kmh"],
+      "properties": {
+        "mean_speed_kmh": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Ego speed across the segment. The primary congestion signal, available at zero CV cost from GNSS alone."
+        },
+        "min_speed_kmh": { "type": "number", "minimum": 0 },
+        "stopped_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Seconds below 3 km/h. Separates a crawling corridor from a signal queue."
+        },
+        "dwell_excluded_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Time spent stopped AT A BUS STOP, excluded from congestion maths. Without this every bus stop reads as a permanent traffic jam."
+        },
+        "vehicle_counts": {
+          "type": "object",
+          "description": "Count of UNIQUE TRACKS observed during the pass, by class. Never per-frame counts, which would scale with bus speed.",
+          "additionalProperties": false,
+          "properties": {
+            "car": { "type": "integer", "minimum": 0 },
+            "two_wheeler": { "type": "integer", "minimum": 0 },
+            "auto_rickshaw": { "type": "integer", "minimum": 0 },
+            "bus": { "type": "integer", "minimum": 0 },
+            "truck": { "type": "integer", "minimum": 0 },
+            "lcv": { "type": "integer", "minimum": 0 },
+            "bicycle": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "occupancy_ratio": {
+          "$ref": "common.schema.json#/$defs/Confidence",
+          "description": "Mean fraction of drivable road area covered by vehicle masks in the forward ROI. Scale-invariant, so it stays meaningful while the bus is moving."
+        },
+        "pcu_estimate": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Passenger Car Units using IRC:106 equivalency factors. Makes an auto-heavy corridor comparable to a car-heavy one."
+        }
+      }
+    },
+
+    "pedestrian": {
+      "type": "object",
+      "description": "Feeds the crowd-density heat map. This is a RATE estimator, not a census: see docs/07 on why the denominator matters.",
+      "properties": {
+        "unique_tracks": { "type": "integer", "minimum": 0 },
+        "observed_area_m2": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Ground area of footpath and verge actually visible during the pass. The denominator. Without it, counts from a clear pass and an occluded pass are not comparable."
+        },
+        "crossing_events": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tracks whose trajectory entered the carriageway."
+        },
+        "cluster_max": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Largest simultaneous group. Drives the vulnerable-pedestrian signal when combined with school-zone and time-of-day gating."
+        },
+        "in_school_zone": {
+          "type": "boolean",
+          "description": "Segment intersects an OSM amenity=school buffer. Set from the map, never inferred from appearance."
+        }
+      }
+    },
+
+    "inspection": {
+      "type": "object",
+      "description": "NEGATIVE EVIDENCE. inspected_for lists asset classes the pipeline could genuinely assess on this pass given conditions and occlusion. Any class present in inspected_for but absent from found is a confirmed non-observation and accrues against the Road Asset Ledger.",
+      "required": ["inspected_for", "found"],
+      "properties": {
+        "inspected_for": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/DetectionClass" },
+          "description": "Condition-gated. No zebra assessment at night or in heavy rain; no surface assessment when occlusion exceeds 0.6."
+        },
+        "found": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/DetectionClass" }
+        },
+        "assessable_fraction": {
+          "$ref": "common.schema.json#/$defs/Confidence",
+          "description": "Fraction of segment length that was actually assessable. A pass stuck behind a truck for 80% of the segment must not count as a clean inspection."
+        }
+      }
+    },
+
+    "conditions": { "$ref": "common.schema.json#/$defs/Conditions" },
+    "model": { "$ref": "common.schema.json#/$defs/ModelProvenance" }
+  }
+}

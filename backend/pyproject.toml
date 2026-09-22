@@ -1,0 +1,58 @@
+[project]
+name = "argus-api"
+version = "0.1.0"
+description = "ARGUS central urban intelligence platform"
+requires-python = ">=3.11"
+
+dependencies = [
+  "fastapi[standard]>=0.115",
+  "uvicorn[standard]>=0.32",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+
+  # Storage. PostGIS for spatial joins, Timescale for hypertables and — the
+  # feature that keeps heat maps fast at fleet scale — continuous aggregates.
+  "sqlalchemy>=2.0",
+  "geoalchemy2>=0.15",
+  "alembic>=1.14",
+  "psycopg[binary,pool]>=3.2",
+
+  # Ingest and realtime
+  "paho-mqtt>=2.1",
+  "redis>=5.2",
+
+  # Fusion. scikit-learn supplies DBSCAN; scipy supplies the Theil-Sen slope used
+  # for severity trend. Both are load-bearing, not conveniences. See docs/04.
+  "scikit-learn>=1.5",
+  "scipy>=1.14",
+  "numpy>=1.26",
+  "shapely>=2.0",
+  "pyproj>=3.6",
+  "h3>=4.1",              # pedestrian-density hexbins
+
+  "boto3>=1.35",          # MinIO / S3 evidence store
+  "python-jose[cryptography]>=3.3",
+  "structlog>=24.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "httpx>=0.27",
+  # Fusion invariants are property-based, not example-based. Hypothesis generates
+  # thousands of observation sequences and checks that confidence stays bounded,
+  # that a repeat device raises it strictly less than a new one, that positional
+  # sigma never increases, and that a resolved asset re-opens on new evidence.
+  "hypothesis>=6.112",
+  "ruff>=0.7",
+  "mypy>=1.13",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://argus.sih/schemas/asset.schema.json",
+  "title": "Asset",
+  "description": "A deduplicated REAL-WORLD THING: one specific pothole on one specific stretch of road, assembled by multi-pass evidence fusion from every Observation the fleet has ever made of it. This is the only defect object a dashboard, a work order or an API consumer ever sees. Assets are produced by the backend, never by the edge. Direction of travel is downstream only: backend -> frontend over REST and WebSocket.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "asset_id",
+    "class_id",
+    "state",
+    "geo",
+    "confidence",
+    "severity",
+    "evidence_count",
+    "first_seen_at",
+    "last_evidence_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.schema.json#/$defs/SchemaVersion" },
+    "asset_id": { "type": "string", "format": "uuid" },
+    "class_id": { "$ref": "common.schema.json#/$defs/DetectionClass" },
+
+    "state": {
+      "type": "string",
+      "enum": ["candidate", "confirmed", "reported", "in_progress", "resolved", "rejected", "stale"],
+      "description": "Lifecycle. candidate: seen, not yet corroborated. confirmed: independently observed by >= K distinct buses. reported: a work order was issued. resolved: the fleet STOPPED seeing it across N qualifying passes, so the repair verified itself. rejected: an operator marked it a false positive, which feeds back as a hard negative for retraining. stale: no qualifying pass in 30 days, so the platform declines to assert anything."
+    },
+
+    "geo": {
+      "allOf": [{ "$ref": "common.schema.json#/$defs/GeoPoint" }],
+      "description": "Inverse-variance weighted centroid across all contributing observations. Positional error shrinks roughly as 1/sqrt(N): a single pass is +/-6 m, twelve passes are under +/-2 m."
+    },
+    "map_match": { "$ref": "common.schema.json#/$defs/MapMatch" },
+
+    "confidence": {
+      "$ref": "common.schema.json#/$defs/Confidence",
+      "description": "Fused belief, accumulated in log-odds across independent observations and weighted by per-device reliability and capture conditions. Three mediocre 0.70 detections from three different buses outrank one isolated 0.95."
+    },
+    "evidence_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of positive observations."
+    },
+    "distinct_devices": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of DIFFERENT edge units that saw it. The corroboration that matters. Forty sightings from one bus is one bus's opinion."
+    },
+    "negative_passes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Qualifying passes that inspected this location for this class and found nothing. Drives auto-resolution."
+    },
+
+    "severity": {
+      "type": "object",
+      "required": ["score", "band"],
+      "properties": {
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Median of per-observation severity. Median, not mean, so one badly-ranged observation cannot drag the figure."
+        },
+        "band": { "$ref": "common.schema.json#/$defs/SeverityBand" },
+        "trend": {
+          "type": "string",
+          "enum": ["worsening", "stable", "improving", "unknown"],
+          "description": "Theil-Sen slope of severity over time. A pothole widening week on week is a different priority from a stable one, and only a repeatedly-passing fleet can tell you which it is."
+        }
+      }
+    },
+
+    "physical": {
+      "type": "object",
+      "properties": {
+        "area_m2": { "type": "number", "minimum": 0 },
+        "length_m": { "type": "number", "minimum": 0 },
+        "surface_damage_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "For damaged_road: percentage of segment surface area classified as distressed. The engineering metric, analogous to a Pavement Condition Index input. Counting individual cracks is not."
+        }
+      }
+    },
+
+    "first_seen_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "last_evidence_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "confirmed_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "resolved_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+
+    "canonical_evidence": {
+      "allOf": [{ "$ref": "common.schema.json#/$defs/Evidence" }],
+      "description": "The single best crop across all observations, selected by sharpness x illumination x subject size. The fleet effectively photographs each defect dozens of times and the platform keeps the best frame."
+    },
+    "evidence_gallery": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/Evidence" },
+      "description": "Up to 6 crops spread across time, so an engineer can see deterioration rather than a single moment."
+    },
+
+    "work_order": {
+      "type": "object",
+      "description": "The municipal hand-off. This is what turns a detection into evidence-based decision making.",
+      "properties": {
+        "reference": { "type": "string", "examples": ["ARG-BBMP-150-004417"] },
+        "ward_id": { "type": "string" },
+        "ward_name": { "type": "string" },
+        "recommended_action": {
+          "type": "string",
+          "description": "Class-specific, from the taxonomy in docs/02. Example: raise patching work order to ward engineer.",
+          "examples": ["Raise patching work order to ward engineer"]
+        },
+        "priority_rank": { "type": "integer", "minimum": 1 },
+        "issued_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+        "sla_due_at": { "$ref": "common.schema.json#/$defs/Timestamp" }
+      }
+    },
+
+    "ledger": {
+      "type": "object",
+      "description": "Present only for missing_* classes, which are never emitted by the edge. It records the map-difference reasoning that concluded something expected is absent, so the conclusion is auditable rather than asserted.",
+      "properties": {
+        "expected_from": {
+          "type": "string",
+          "enum": ["osm", "historical_observation", "municipal_import"],
+          "description": "osm: the map says a crossing belongs at this junction. historical_observation: the fleet used to see it and no longer does."
+        },
+        "expected_reference": { "type": "string", "examples": ["osm:node/1029384756"] },
+        "consecutive_absences": { "type": "integer", "minimum": 0 },
+        "last_positive_at": { "$ref": "common.schema.json#/$defs/Timestamp" }
+      }
+    }
+  }
+}

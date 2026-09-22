@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://argus.sih/schemas/incident.schema.json",
+  "title": "Incident",
+  "description": "A driving-behaviour or collision event involving a THIRD-PARTY vehicle observed from the bus. Structurally different from an Observation: an Observation is a per-frame detection of a static thing, an Incident is a conclusion drawn from a TRACKED TRAJECTORY over a time window. Incidents pre-empt the uplink queue entirely and are transmitted immediately. MQTT topic: argus/v1/{fleet}/{device_id}/incident (QoS 2)",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "incident_id",
+    "device_id",
+    "incident_type",
+    "started_at",
+    "ended_at",
+    "confidence",
+    "geo",
+    "triggers"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.schema.json#/$defs/SchemaVersion" },
+    "incident_id": { "type": "string", "format": "uuid" },
+    "device_id": { "$ref": "common.schema.json#/$defs/DeviceId" },
+    "bus_id": { "type": "string" },
+    "route_id": { "type": "string" },
+    "incident_type": {
+      "type": "string",
+      "enum": [
+        "rash_driving",
+        "dangerous_overtake",
+        "wrong_way",
+        "red_light_violation",
+        "collision",
+        "hit_and_run",
+        "near_miss_vru"
+      ],
+      "description": "hit_and_run is collision + the offending track departing the scene above a speed threshold. The distinction is made from trajectory, not from intent."
+    },
+    "started_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "ended_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "confidence": { "$ref": "common.schema.json#/$defs/Confidence" },
+    "severity": { "$ref": "common.schema.json#/$defs/SeverityBand" },
+    "geo": { "$ref": "common.schema.json#/$defs/GeoPoint" },
+    "map_match": { "$ref": "common.schema.json#/$defs/MapMatch" },
+    "ego": { "$ref": "common.schema.json#/$defs/EgoState" },
+
+    "triggers": {
+      "type": "object",
+      "description": "The kinematic evidence that fired the classifier. Recorded so a human reviewer can audit WHY the system concluded an incident, rather than being asked to trust a score.",
+      "properties": {
+        "ttc_s": { "type": "number", "description": "Minimum time-to-collision observed against the subject track, in seconds." },
+        "lateral_accel_ms2": { "type": "number", "description": "Peak lateral acceleration of the subject track." },
+        "lane_changes": { "type": "integer", "minimum": 0, "description": "Lane crossings by the subject track within the window." },
+        "ego_impact_g": { "type": "number", "description": "Peak IMU magnitude on the bus. The primary collision trigger; a camera can miss an impact the chassis cannot." },
+        "track_discontinuity": { "type": "boolean", "description": "Subject trajectory broke in a way consistent with a collision rather than occlusion." },
+        "departure_speed_kmh": { "type": "number", "description": "Subject speed leaving the scene. Separates hit_and_run from collision." },
+        "vru_proximity_m": { "type": "number", "description": "Closest approach to a tracked pedestrian or cyclist." }
+      }
+    },
+
+    "subject_vehicle": {
+      "type": "object",
+      "description": "The offending vehicle, as reconstructed from its track.",
+      "properties": {
+        "track_id": { "type": "string" },
+        "vehicle_class": {
+          "type": "string",
+          "enum": ["car", "two_wheeler", "auto_rickshaw", "bus", "truck", "lcv", "unknown"]
+        },
+        "colour": { "type": "string" },
+        "plate": {
+          "type": "object",
+          "description": "ANPR result. The plate string is assembled by PER-CHARACTER MAJORITY VOTE across every frame of the track, not read from a single best frame. A single 640p read from a moving bus is unreliable; voting across 20+ frames is not, and it produces a genuine confidence figure rather than a softmax score.",
+          "properties": {
+            "text": { "type": "string", "examples": ["KA 05 MJ 7213"] },
+            "confidence": {
+              "$ref": "common.schema.json#/$defs/Confidence",
+              "description": "Product of per-character vote margins. This is the confidence score the problem statement asks for."
+            },
+            "per_character_confidence": {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0, "maximum": 1 },
+              "description": "Exposed so an operator can see WHICH character is uncertain. A plate reading 0.94 overall but 0.41 on one digit is actionable in a way a single scalar is not."
+            },
+            "frames_voted": { "type": "integer", "minimum": 1 },
+            "state_code_valid": {
+              "type": "boolean",
+              "description": "Whether the leading two letters are a real RTO state code. A cheap, strong sanity filter on OCR output."
+            }
+          }
+        }
+      }
+    },
+
+    "evidence": {
+      "type": "object",
+      "required": ["clip_uri", "sha256"],
+      "description": "The one case where video, not a crop, leaves the bus. A pre-roll buffer means the clip starts BEFORE the trigger.",
+      "properties": {
+        "clip_uri": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "duration_s": { "type": "number", "description": "Typically 30 s: 10 s pre-roll plus 20 s post-trigger." },
+        "cameras": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/CameraId" }
+        },
+        "plate_crop_uri": { "type": "string" },
+        "faces_blurred": { "type": "boolean" },
+        "encrypted": { "type": "boolean", "description": "Incident clips are encrypted at rest. Access is logged against an operator identity." }
+      }
+    },
+
+    "model": { "$ref": "common.schema.json#/$defs/ModelProvenance" }
+  }
+}

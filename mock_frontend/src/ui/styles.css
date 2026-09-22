@@ -1,0 +1,705 @@
+/*
+ * ARGUS interface chrome.
+ *
+ * Art direction: dark 3D scene, deliberately *clean* UI. No neon, no glow on
+ * panels, no sci-fi framing. The 3D view supplies the drama; the chrome should
+ * look like software a transport authority would actually be issued.
+ *
+ * Colour tokens are defaults here and are overwritten at boot from
+ * core/theme.js, so the scene and the chrome cannot drift apart.
+ */
+
+:root {
+  --void: #05070b;
+  --accent: #38bdf8;
+  --text: #e2e8f0;
+  --text-dim: #8b9bb0;
+
+  --panel: rgba(10, 14, 21, 0.74);
+  --panel-solid: rgba(9, 12, 18, 0.94);
+  --hairline: rgba(255, 255, 255, 0.075);
+  --hairline-strong: rgba(255, 255, 255, 0.14);
+  --inset: rgba(255, 255, 255, 0.035);
+
+  --radius: 10px;
+  --gap: 12px;
+  /* Width of the left rail. The evidence card is offset by this so the two can
+     never overlap - which they did when the card was anchored to the corner. */
+  --rail: 236px;
+
+  --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* The WebGL canvas fills the window; every panel floats above it. */
+#scene {
+  position: fixed;
+  inset: 0;
+}
+
+#scene canvas {
+  display: block;
+}
+
+/* Overlay root ignores pointer events so orbiting works anywhere the chrome
+   is not; individual panels opt back in. */
+#ui {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  padding: var(--gap);
+  gap: var(--gap);
+}
+
+.panel {
+  pointer-events: auto;
+  background: var(--panel);
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+
+/* Micro-label: the small uppercase caption used above every value. Wide
+   letter-spacing at this size is what keeps it legible rather than muddy. */
+.eyebrow {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* ── top bar ──────────────────────────────────────────────────────────── */
+
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 14px;
+  flex: 0 0 auto;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.brand-mark {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: var(--text);
+}
+
+.brand-sub {
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: 0.01em;
+}
+
+.brand-sub b {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.topbar-spacer {
+  flex: 1;
+}
+
+.live {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #34d399;
+  animation: breathe 2.1s ease-in-out infinite;
+}
+
+.live.is-paused .live-dot {
+  background: #f59e0b;
+  animation: none;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.28;
+  }
+}
+
+/* Loop progress: a hairline scrubber showing where in the 90s cycle we are. */
+.loop {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 168px;
+}
+
+.loop-track {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--inset);
+  overflow: hidden;
+}
+
+.loop-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  opacity: 0.85;
+}
+
+.loop-time {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  min-width: 42px;
+  text-align: right;
+}
+
+/* ── main columns ─────────────────────────────────────────────────────── */
+
+#stage {
+  flex: 1;
+  display: flex;
+  gap: var(--gap);
+  min-height: 0;
+}
+
+#left,
+#right {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  min-height: 0;
+}
+
+#left {
+  width: var(--rail);
+}
+
+#right {
+  width: 312px;
+  margin-left: auto;
+}
+
+/* ── KPI stats ────────────────────────────────────────────────────────── */
+
+#kpis {
+  padding: 12px 13px 13px;
+  flex: 0 0 auto;
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 11px 10px;
+  margin-top: 11px;
+}
+
+.kpi {
+  min-width: 0;
+}
+
+.kpi-value {
+  font-size: 21px;
+  font-weight: 650;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.kpi-unit {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dim);
+  margin-left: 2px;
+}
+
+.kpi-label {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-top: 3px;
+}
+
+/* The uplink queue is the one KPI that moves both up and down, so it gets an
+   accent to draw the eye - it is the detail that explains the pacing. */
+.kpi.is-queue .kpi-value {
+  color: var(--accent);
+}
+
+/* ── legend ───────────────────────────────────────────────────────────── */
+
+#legend {
+  padding: 12px 13px 11px;
+  flex: 0 0 auto;
+}
+
+.legend-list {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: #b6c3d4;
+}
+
+.legend-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+
+.legend-count {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── event feed ───────────────────────────────────────────────────────── */
+
+#feed {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.feed-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 13px 9px;
+  border-bottom: 1px solid var(--hairline);
+  flex: 0 0 auto;
+}
+
+.feed-count {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+.feed-list {
+  list-style: none;
+  margin: 0;
+  padding: 5px;
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+}
+
+.feed-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 9px;
+  row-gap: 2px;
+  align-items: center;
+  padding: 7px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 120ms ease;
+  animation: feed-in 320ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+.feed-row:hover {
+  background: var(--inset);
+}
+
+.feed-row.is-selected {
+  background: rgba(56, 189, 248, 0.11);
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.28);
+}
+
+/* Critical events flash once on arrival, then settle. A permanent animation
+   here would pull focus for the rest of the demo. */
+.feed-row.is-critical {
+  animation: feed-in 320ms cubic-bezier(0.2, 0.8, 0.3, 1),
+    critical-flash 1.5s ease-out 320ms 2;
+}
+
+@keyframes feed-in {
+  from {
+    opacity: 0;
+    transform: translateY(-7px);
+  }
+}
+
+@keyframes critical-flash {
+  0%,
+  100% {
+    background: transparent;
+  }
+  40% {
+    background: rgba(239, 68, 68, 0.2);
+  }
+}
+
+.feed-glyph {
+  grid-row: 1 / span 2;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+
+.feed-label {
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-conf {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #c3d0e0;
+}
+
+.feed-meta {
+  grid-column: 2 / span 2;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-empty {
+  padding: 18px 13px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+/* ── evidence card ────────────────────────────────────────────────────── */
+
+#detail {
+  position: fixed;
+  /* Sits immediately right of the left rail, never over it. */
+  left: calc(var(--rail) + var(--gap) * 2);
+  bottom: 46px;
+  width: 342px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  pointer-events: auto;
+  background: var(--panel-solid);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(10px) scale(0.985);
+  transition: opacity 180ms ease, transform 220ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+#detail.is-open {
+  opacity: 1;
+  transform: none;
+}
+
+#detail.is-closed {
+  pointer-events: none;
+}
+
+.detail-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 13px 11px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.detail-accent {
+  width: 3px;
+  border-radius: 2px;
+  align-self: stretch;
+  flex: 0 0 auto;
+}
+
+.detail-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.detail-title h2 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+}
+
+.detail-title p {
+  margin: 3px 0 0;
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+.chip {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 3px 6px;
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+
+.detail-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 3px;
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+
+.detail-close:hover {
+  color: var(--text);
+  background: var(--inset);
+}
+
+/* Procedurally drawn mock camera still - see ui/detail.js */
+.detail-frame {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-bottom: 1px solid var(--hairline);
+  background: #06090d;
+}
+
+.detail-body {
+  padding: 11px 13px 13px;
+}
+
+.conf-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 11px;
+}
+
+.conf-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--inset);
+  overflow: hidden;
+}
+
+.conf-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 420ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+.conf-value {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px 12px;
+}
+
+.field {
+  min-width: 0;
+}
+
+.field-value {
+  font-size: 11.5px;
+  font-family: var(--mono);
+  color: var(--text);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field.is-wide {
+  grid-column: 1 / -1;
+}
+
+.field.is-wide .field-value {
+  font-family: var(--font);
+  font-size: 11.5px;
+  color: #c3d0e0;
+  white-space: normal;
+}
+
+/* Registration-mark block, shown only for incident events. */
+.plate {
+  margin: 11px 0 0;
+  padding: 9px 11px;
+  border-radius: 7px;
+  background: rgba(239, 68, 68, 0.09);
+  border: 1px solid rgba(239, 68, 68, 0.26);
+}
+
+.plate-value {
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  margin-top: 3px;
+}
+
+.plate-meta {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+/* ── bottom hint bar ──────────────────────────────────────────────────── */
+
+#hints {
+  position: fixed;
+  left: var(--gap);
+  bottom: var(--gap);
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+kbd {
+  margin-right: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--hairline);
+  color: #b6c3d4;
+}
+
+/* Mock-build disclaimer. Being explicit that this is illustrative is the
+   honest thing to put on a demo that will be shown to judges. */
+#disclaimer {
+  position: fixed;
+  right: var(--gap);
+  bottom: var(--gap);
+  font-size: 10px;
+  color: rgba(139, 155, 176, 0.62);
+  pointer-events: none;
+  text-align: right;
+}
+
+/* ── hover tooltip ────────────────────────────────────────────────────── */
+
+#tooltip {
+  position: fixed;
+  pointer-events: none;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--panel-solid);
+  border: 1px solid var(--hairline-strong);
+  font-size: 11px;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 110ms ease;
+  z-index: 10;
+}
+
+#tooltip.is-visible {
+  opacity: 1;
+}
+
+#tooltip .tt-conf {
+  font-family: var(--mono);
+  color: var(--text-dim);
+  margin-left: 5px;
+}
+
+/* ── responsive fallback ──────────────────────────────────────────────── */
+
+@media (max-width: 1180px) {
+  :root {
+    --rail: 204px;
+  }
+  #right {
+    width: 268px;
+  }
+}
+
+@media (max-width: 900px) {
+  #left,
+  #legend {
+    display: none;
+  }
+  #right {
+    width: 240px;
+  }
+  /* Left rail is hidden at this size, so reclaim the corner. */
+  #detail {
+    left: var(--gap);
+    width: 300px;
+  }
+}

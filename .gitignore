@@ -1,0 +1,59 @@
+# ── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ── Node ──────────────────────────────────────────────────────────────────
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# ── Model weights & compiled engines ──────────────────────────────────────
+# Source of truth for models is the release page / DVC remote, never git.
+*.pt
+*.pth
+*.onnx
+*.engine
+*.hef
+*.tflite
+*.trt
+runs/
+
+# ── Datasets & captured footage ───────────────────────────────────────────
+data/raw/
+data/interim/
+datasets/
+*.mp4
+*.mov
+*.mkv
+*.avi
+
+# ── Baked map tiles (regenerate with frontend/scripts/bake-bangalore.mjs) ──
+frontend/data/*.json
+!frontend/data/.gitkeep
+
+# ── Secrets ───────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# ── Local state ───────────────────────────────────────────────────────────
+ops/volumes/
+*.sqlite
+*.db
+*.log
+
+# ── OS / editor ───────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
