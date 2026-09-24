@@ -41,6 +41,11 @@ disk, and blurring happens **before the frame is written or queued**.
                       unblurred pixels never exist outside RAM
 ```
 
+**Camera phones hold nothing.** They capture and stream, and never write a frame to their own
+storage. The stream crosses only the bus's local Wi-Fi — a WPA2/WPA3 hotspot hosted by the edge
+phone that only the camera phones join, with no route to the internet. Unblurred pixels exist
+on the camera phone's encoder and in the edge phone's RAM, and nowhere else.
+
 `Evidence.faces_blurred` rides in the message, and **ingest rejects any evidence containing
 people with that flag unset**, flagging the device. The guarantee is enforced at the boundary
 rather than trusted from the edge.
@@ -70,7 +75,7 @@ not to should be able to prove it didn't.
 
 ### 4. The cabin camera does one thing
 
-Occupancy count. That is all. At 0.2 Hz, faces blurred before anything is stored, no crop of an
+Not fitted in the MVP (front + rear only). When it is: occupancy count. That is all. At 0.2 Hz, faces blurred before anything is stored, no crop of an
 individual passenger ever retained. Occupancy feeds the passenger-hours-lost metric in
 [`docs/07`](07-analytics-methods.md#congestion), which is a genuinely useful planning input and
 requires nothing but a number.
@@ -109,8 +114,8 @@ rather than assumed.
 The strongest privacy property of this system is a consequence of the bandwidth design rather
 than a separate feature:
 
-> **Video does not leave the bus.** Roughly 86 GB of footage per bus per day is processed and
-> discarded on board. About 12.5 MB of findings leaves.
+> **Video does not leave the bus.** Roughly 43 GB of footage per bus per day from two cameras
+> is processed and discarded on board. About 12.5 MB of findings leaves.
 
 There is no central archive of everything every bus saw, because there is no link that could
 carry it and no storage that could hold it. The thing that makes the system affordable is the
@@ -129,7 +134,8 @@ Naming these is part of the design being credible.
 | Plate visible incidentally in a defect crop | Crops are tight to the defect and ground-facing; plates are rarely in frame | Low |
 | Re-identification by inference from patterns | We store no track identity beyond a segment pass | Low |
 | Mission creep by a future operator | Capabilities absent from the codebase, not merely disabled by config | Requires new development, which is the point |
-| Device physical compromise in a depot | Per-device certificates, revocable individually; no shared secrets | Bounded to one bus |
+| Device physical compromise in a depot | Per-device certificates in the edge phone's Android Keystore, revocable individually; no shared secrets | Bounded to one bus |
+| A phone is lifted off the bus | Camera phones hold no footage and no credentials; the edge phone's spool is encrypted and its certificate revocable | Bounded to that phone's unsent findings |
 
 That last row is why device identity is a certificate rather than an API key. A bus is a box
 parked overnight in a place many people can reach.
@@ -142,5 +148,5 @@ parked overnight in a place many people can reach.
 > this confident, with one photograph of the road surface, faces already blurred before that
 > photograph was written to disk. We do not run face recognition. We do not read the plate of
 > every vehicle we pass; we read one plate, of one vehicle, in one detected incident, and we log
-> that we did. Of 86 gigabytes a bus sees in a day, about 12 megabytes leaves it — and that's
+> that we did. Of 43 gigabytes a bus sees in a day, about 12 megabytes leaves it — and that's
 > not a privacy feature we added, it's the same decision that makes the system affordable."*

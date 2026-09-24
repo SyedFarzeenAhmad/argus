@@ -52,7 +52,7 @@ governs what the video may therefore say.
 
 | # | Clause | How ARGUS answers it | Where | Phase |
 |---|---|---|---|---|
-| A1 | *"analyse video streams from multiple bus-mounted cameras"* | Multi-stream ingest from RTSP/USB/file. Front camera at full rate; rear, side and cabin at reduced or event-triggered rates. Input is a URI, never a device, so a video file exercises the identical path. | [`03`](03-cv-pipeline.md#multi-camera-policy) | 1 |
+| A1 | *"analyse video streams from multiple bus-mounted cameras"* | Camera phones stream over the bus's local Wi-Fi to one edge phone, which ingests N RTSP streams; the MVP fits **front + rear**. Front at full rate, rear at a reduced rate that escalates on incidents. Input is a URI, never a device, so a video file exercises the identical path. | [`03`](03-cv-pipeline.md#on-bus-topology) | 1 |
 | A2 | *"potholes"* | Instance segmentation. Mask area is projected to ground metres by IPM, so severity is physical extent rather than pixel count. | [`02`](02-detection-taxonomy.md#pothole) | 1 |
 | A3 | *"damaged roads"* | Semantic segmentation of surface distress → **% distressed area per 10 m**, a PCI-style engineering metric. Counting cracks would not be one. | [`02`](02-detection-taxonomy.md#damaged_road) | 2 |
 | A4 | *"missing road dividers"* | **Ledger inference.** Detector reports dividers present; backend raises `missing_divider` where OSM or fleet history expects one and qualifying passes repeatedly don't see it. | [`02`](02-detection-taxonomy.md#missing-classes) | 2 |
@@ -67,7 +67,7 @@ governs what the video may therefore say.
 | A13 | *"extract the registration number with a confidence score"* | Plate detect → perspective rectify → OCR → **per-character majority vote across the whole track**. The vote margin *is* the confidence score, and per-character confidence is exposed so an operator sees which digit is doubtful. | [`03`](03-cv-pipeline.md#anpr) | 3 |
 | A14 | *"timestamp and GPS location"* | NTP-disciplined edge clock; GNSS interpolated from 1 Hz to frame rate; IPM gives the *detection's* ground position, not the bus's; map-matching snaps it to a road segment. Error budget stated. | [`03`](03-cv-pipeline.md#geo-referencing) | 1 |
 | A15 | *"securely share alerts with a central command system"* | MQTT over TLS 1.3 with per-device X.509 certificates, QoS 2 for incidents, store-and-forward spool across cellular dropouts. | [`04`](04-backend.md#ingest) | 1 |
-| A16 | *"minimizing bandwidth through intelligent edge processing"* | Video never leaves the bus except as incident evidence. ~12.5 MB/bus/day against ~86 GB. Severity-aged priority queue governs transmission order. | [`03`](03-cv-pipeline.md#bandwidth-budget) | 1 |
+| A16 | *"minimizing bandwidth through intelligent edge processing"* | Video never leaves the bus except as incident evidence. Video crosses only the bus's local Wi-Fi, camera phone → edge phone. ~12.5 MB/bus/day against ~43 GB from two cameras. Severity-aged priority queue governs transmission order. | [`03`](03-cv-pipeline.md#bandwidth-budget) | 1 |
 
 ## B. Centralized platform requirements
 
@@ -92,8 +92,10 @@ governs what the video may therefore say.
 
 Being explicit about this is worth more than quietly over-claiming.
 
-**"Passenger cabin" cameras.** The brief lists cabin cameras. We use them for occupancy
-estimation and in-cabin safety only, with **on-device face blurring before any frame is
+**Side and cabin cameras.** The brief lists front, rear, sides and cabin. The MVP fits front
+and rear camera phones; a camera is one more RTSP URI in config, so sides and cabin are a
+roadmap item bounded by edge-phone compute, not a redesign. When fitted, cabin cameras are
+used for occupancy estimation and in-cabin safety only, with **on-device face blurring before any frame is
 persisted or transmitted**. We do not do passenger identification, behaviour scoring or
 emotion inference. See [`docs/08`](08-privacy-and-compliance.md).
 

@@ -9,13 +9,14 @@ fails CI rather than failing in November.
 
 ```
                     ┌──────────────────────────┐
-  cv-pipeline/ ───▶ │  contracts/schemas/*.json│ ◀─── frontend/
+  edge-app/ ──────▶ │  contracts/schemas/*.json│ ◀─── frontend/
    (produces)       │   THE SOURCE OF TRUTH    │      (consumes)
                     └────────────┬─────────────┘
                                  │  generated
                     ┌────────────┴─────────────┐
                     │ python/  argus_contracts │ ◀─── backend/
                     │ ts/      @argus/contracts│      (both)
+                    │ kotlin/  argus.contracts │ ◀─── edge-app/
                     └──────────────────────────┘
 ```
 
@@ -51,9 +52,12 @@ python contracts/generate.py --lang python --out contracts/python/argus_contract
 
 # TypeScript
 node contracts/generate.mjs --out contracts/ts/src
+
+# Kotlin (kotlinx.serialization) — for edge-app/
+node contracts/generate.mjs --lang kotlin --out contracts/kotlin/argus/contracts
 ```
 
-Both are wired into CI. A PR that edits `schemas/` without regenerating fails.
+All three are wired into CI. A PR that edits `schemas/` without regenerating fails.
 
 ## Versioning
 

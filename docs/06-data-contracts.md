@@ -68,7 +68,7 @@ Four go up, one comes down. The edge never sees an `asset`; the frontend never s
   },
   "model": {
     "name": "argus-road-defect", "version": "0.4.2",
-    "runtime": "tensorrt-int8", "input_res": "960x544"
+    "runtime": "nnapi-int8", "input_res": "960x544"
   }
 }
 ```
@@ -139,7 +139,7 @@ would have a box about a seventh the area.
     "illumination": "day", "weather": "clear",
     "occlusion": 0.14, "motion_blur": 0.10
   },
-  "model": { "name": "argus-multitask", "version": "0.4.2", "runtime": "tensorrt-int8" }
+  "model": { "name": "argus-multitask", "version": "0.4.2", "runtime": "nnapi-int8" }
 }
 ```
 
@@ -210,7 +210,7 @@ would have a box about a seventh the area.
     "faces_blurred": true,
     "encrypted": true
   },
-  "model": { "name": "argus-behaviour", "version": "0.3.1", "runtime": "tensorrt-fp16" }
+  "model": { "name": "argus-behaviour", "version": "0.3.1", "runtime": "nnapi-int8" }
 }
 ```
 
@@ -242,20 +242,25 @@ than every other message type in the system combined.
   "schedule": { "next_stop_id": "bmtc:4412", "delay_s": 214, "headway_s": 640 },
   "health": {
     "uptime_s": 18442, "queue_depth": 7, "queue_oldest_s": 12,
-    "cpu_pct": 58, "gpu_pct": 71, "temp_c": 68.4,
+    "cpu_pct": 58, "gpu_pct": 71, "temp_c": 41.8,
     "inference_fps": 14.2, "dropped_frames_pct": 0.6,
-    "cameras_online": ["front", "rear", "left", "right", "cabin"],
-    "camera_quality": { "front": 0.93, "rear": 0.88, "left": 0.61, "right": 0.90, "cabin": 0.85 },
+    "cameras_online": ["front", "rear"],
+    "camera_quality": { "front": 0.93, "rear": 0.61 },
     "gnss_fix": "3d", "link": "4g", "uplink_kb_session": 3184
   },
-  "model": { "name": "argus-multitask", "version": "0.4.2", "runtime": "tensorrt-int8" }
+  "model": { "name": "argus-multitask", "version": "0.4.2", "runtime": "nnapi-int8" }
 }
 ```
 
-`camera_quality.left: 0.61` is a dirty lens, and it is the realistic failure mode of a
+`camera_quality.rear: 0.61` is a dirty rear window, and it is the realistic failure mode of a
 6,400-unit fleet — not a crash, but a bus that quietly stops contributing while everything still
-looks green. `temp_c: 68.4` and `inference_fps: 14.2` together catch thermal throttling, which
+looks green. A camera phone that drops off the local Wi-Fi simply leaves `cameras_online`.
+`temp_c` (the edge phone's) and `inference_fps` together catch thermal throttling, which
 manifests as silently reduced coverage.
+
+**Proposed minor bump, not yet in the schema:** per-camera-phone health (battery, temperature,
+stream FPS, clock offset) under `health.camera_units`. Camera phones are separate handsets that
+can overheat or unplug on their own. Needs a `contracts/` PR regenerating both languages.
 
 **Size: ~250 B.** At 5 s while moving and 30 s while idle, ~2.3 MB per bus per day.
 

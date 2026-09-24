@@ -57,3 +57,13 @@ ops/volumes/
 Thumbs.db
 .idea/
 .vscode/
+
+# ── Android (edge-app/) ───────────────────────────────────────────────────
+# Build output stays out of git; the versioned release APK in edge-app/release/ is committed.
+.gradle/
+edge-app/**/build/
+edge-app/local.properties
+edge-app/.cxx/
+*.jks
+*.keystore
+!edge-app/release/*.apk

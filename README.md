@@ -12,8 +12,9 @@ Intelligence Platform Using Public Transport Fleet*
 Bengaluru's BMTC runs roughly 6,400 buses over roughly 2,200 routes, and between them they
 drive nearly every arterial road in the city, several times a day, every day. Those buses
 already carry cameras — used today only to review incidents after the fact. ARGUS treats
-that fleet as a distributed sensor array. Onboard edge units analyse the camera streams
-in place, transmit **findings rather than footage**, and a central platform fuses the
+that fleet as a distributed sensor array. On each bus, off-the-shelf phones do the work: front
+and rear camera phones stream over the bus's own Wi-Fi to an edge phone that analyses the
+streams in place, transmit **findings rather than footage**, and a central platform fuses the
 findings from every pass by every bus into a live picture of road condition, congestion,
 pedestrian pressure and unsafe driving — with the evidence attached.
 
@@ -49,10 +50,11 @@ water. → [`docs/07`](docs/07-analytics-methods.md#congestion)
 
 | | Per bus per day | BMTC fleet (~6,400 buses) |
 |---|---:|---:|
-| Raw video, 4 cameras @ 1080p30 | ~86 GB | **~553 TB / day** |
+| Raw video, 2 cameras (front + rear) @ 1080p30 | ~43 GB | **~276 TB / day** |
 | ARGUS events + evidence crops, over cellular | ~12.5 MB | **~80 GB / day** |
 
-A **~6,900×** reduction, and it's arithmetic rather than a claim. (Incident video clips are
+A **~3,500×** reduction from just two cameras (~6,900× against the brief's four-camera
+fit-out), and it's arithmetic rather than a claim. (Incident video clips are
 the one exception and they ride depot wifi overnight rather than cellular — sending them live
 would have cost more than every other message type combined.)
 
@@ -67,8 +69,11 @@ clause, evidenced. Full working in [`docs/03`](docs/03-cv-pipeline.md#bandwidth-
 argus/
 ├── contracts/        JSON Schema for every cross-team message + generated Py/TS types.
 │                     THE SEAM. Read contracts/README.md first.
-├── cv-pipeline/      Edge AI. Video in, Observations out. Runs on Orin / Pi+Hailo /
-│                     Android / laptop from one ONNX file.
+├── cv-pipeline/      CV–Perception. Datasets, training, ONNX export, calibration, and the
+│                     Python reference the app's golden frames come from.
+├── edge-app/         CV–Edge. Kotlin Android app, one APK: Camera mode (front/rear phones
+│                     stream RTSP) and Edge mode (runs the models, sends findings).
+│                     Release APK committed in edge-app/release/.
 ├── backend/          FastAPI + PostGIS + TimescaleDB + MQTT. Ingest, fusion, analytics,
 │                     WebSocket fan-out.
 ├── frontend/         Two views over one event store: a three.js Live Command view and a
@@ -93,14 +98,14 @@ argus/
 | [`08-privacy-and-compliance.md`](docs/08-privacy-and-compliance.md) | DPDP Act 2023, on-device blurring, retention, audit |
 | [`09-build-plan.md`](docs/09-build-plan.md) | 10 weeks, 4 people, named owners, phase exit criteria |
 | [`10-video-claims-matrix.md`](docs/10-video-claims-matrix.md) | **Every claim the submission video may make**, and its evidence status |
-| [`11-hardware-benchmark.md`](docs/11-hardware-benchmark.md) | Orin vs Pi+Hailo vs Android: method, and the table we intend to fill |
+| [`11-hardware-benchmark.md`](docs/11-hardware-benchmark.md) | Phone setup measured under soak now; dedicated boards (Orin, Pi+Hailo) after the MVP |
 
 ## Team
 
 | Owner | Folder | Deliverable |
 |---|---|---|
-| CV — Perception | `cv-pipeline/` models | An ONNX file, a class list, a validation report |
-| CV — Edge runtime | `cv-pipeline/` service | A URI in, `Observation`s out, on three hardware targets |
+| CV — Perception | `cv-pipeline/` | An ONNX file, a class list, a validation report |
+| CV — Edge | `edge-app/` | An APK: camera phones stream in, schema-valid messages out of the edge phone |
 | Backend | `backend/`, `ops/` | Ingest → fusion → analytics → API → WebSocket |
 | Frontend | `frontend/` | Live Command (3D) + Analytics (2D), over real Bengaluru |
 
@@ -118,6 +123,9 @@ cd backend && uv sync && uv run alembic upgrade head && uv run fastapi dev
 # frontend
 cd frontend && npm install && npm run dev
 
+# edge: install edge-app/release/argus-edge-<version>.apk on 3 phones —
+# two in Camera mode (front, rear), one in Edge mode pointed at mqtt://<laptop-ip>:1883
+
 # no CV yet? replay a recorded event log into MQTT at wall-clock speed
 python ops/replay/replay.py --log ops/replay/logs/bengaluru-mgroad.jsonl --speed 1.0
 ```
@@ -131,7 +139,7 @@ cd mock_frontend && npm install && npm run build && npm run preview   # :4173
 ## Status
 
 Pre-implementation. This repository currently holds the **design of record** and the
-contracts; the three service folders are scaffolded and empty. Everything asserted in
+contracts; the service folders are scaffolded and empty. Everything asserted in
 `docs/` is a commitment to build, not a description of built software — see
 [`docs/10`](docs/10-video-claims-matrix.md), which exists specifically so the submission
 video never claims more than this table supports.

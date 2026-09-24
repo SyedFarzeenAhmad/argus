@@ -1,7 +1,7 @@
 # ARGUS platform — design of record
 
 **Date:** 2026-09-22
-**Status:** Approved
+**Status:** Approved · amended 2026-09-25 (D11 supersedes D4)
 **Scope:** Repository structure, technical architecture and build plan for SIH 2026 PS 26124.
 **Supersedes nothing.** Extends `mock_frontend/docs/superpowers/specs/2026-09-08-argus-3d-visualiser-design.md`,
 which covered the visualiser slice only.
@@ -63,7 +63,7 @@ key. One message, four analytics products.
    against a learned per-segment free-flow baseline, requiring no CV. Occupancy ratio and active
    assets then attribute cause: demand, drainage, incident or capacity loss.
 
-### D4 — Hardware is a result, not an input
+### D4 — Hardware is a result, not an input  *(superseded by D11, 2026-09-25)*
 
 One ONNX artefact, four execution providers. The deployment board is chosen by a measured
 benchmark ([`docs/11`](../../11-hardware-benchmark.md)) across Jetson Orin, Pi 5 + Hailo-8L and
@@ -72,6 +72,33 @@ Android, reporting mAP, sustained post-thermal-soak FPS, watts and ₹/bus.
 This inverts the usual order at the user's direction, and it makes portability a hard constraint:
 if any target needs its own retrained model, the comparison is between three systems rather than
 one system on three boards.
+
+### D11 — The edge is Android phones: two camera phones, one edge phone  *(2026-09-25)*
+
+For the MVP the bus carries three off-the-shelf phones. The **front** and **rear** camera phones
+only capture, hardware-encode H.264 and serve RTSP over a local Wi-Fi hotspot (no internet).
+The **edge** phone hosts that hotspot, ingests the N streams, runs every model, uses its own
+GNSS + IMU as the bus's pose, and uplinks findings over MQTT/TLS. One Kotlin APK, started in
+Camera or Edge mode; the versioned release APK is committed to `edge-app/release/`.
+
+- The camera count is **N by config** (a camera is an RTSP URI); the MVP fits two. Side and
+  cabin cameras are roadmap.
+- One edge phone = one `device_id`, so fusion's distinct-device corroboration still means
+  distinct buses. Cameras are `camera_id`s, not devices.
+- Frames carry **capture** time from the camera phone, synced to the edge phone to ≤ 20 ms;
+  arrival time would misplace detections by metres at speed.
+- The model stays one portable ONNX file. The Jetson / Pi + Hailo comparison of D4 is
+  **deferred until the phone MVP works**: the phone setup is measured first, a per-bus
+  hardware requirement is derived from it, and dedicated boards are presented to the judges in
+  the PPT as the next step ([`docs/11`](../../11-hardware-benchmark.md)).
+- CV–Edge moves from a Python service in `cv-pipeline/` to a Kotlin app in `edge-app/`.
+  `cv-pipeline/` becomes CV–Perception only: training, export, calibration, and the Python
+  reference that produces the app's golden frames.
+
+*Why:* phones are self-contained (camera, GNSS, IMU, modem, battery), need no wiring or
+enclosure, and are the strongest fleet-retrofit story; building the MVP on them first removes
+hardware procurement from the critical path. *Cost:* all compute sits on one phone, so the
+compute and thermal budget is the MVP's tightest constraint and must be measured under soak.
 
 ### D5 — Apache-2.0 model architectures for shipping
 
@@ -127,6 +154,7 @@ as the rehearsed fallback demo. `frontend/` is seeded from it and evolves separa
 | Multi-task backbone training fails to balance | Keep three independent models live until it wins; decision point week 6 |
 | Own footage capture slips | Scheduled day 1–2 of week 1; it is the only task with a hard physical dependency and it feeds both the video and training |
 | Frame rate unverified on presentation hardware | Inherited open item from the internal round; close in week 1 |
+| One edge phone can't sustain two streams post-soak | Measured in Phase 1, not Phase 3; rate levers (vehicle 15 → 10 Hz, rear idle 5 → 2 Hz, INT8) decided in advance in [`docs/03`](../../03-cv-pipeline.md#multi-camera-policy) |
 | Fusion bugs produce plausible wrong answers | Property-based tests on invariants; the component gets the most test attention |
 | Demo-day infrastructure failure | Replay service maintained all ten weeks, rehearsed as a mid-sentence switch |
 
