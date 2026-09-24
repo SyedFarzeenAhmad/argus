@@ -21,7 +21,7 @@ class MessagesTest {
 
     @Test fun observationMatchesContractShape() {
         val obs = Messages.observation(
-            "0b9e7c7e-6a2f-4c7b-9a0e-3f1d2c4b5a69", who, "front", 1_790_000_000_123L, 0.8123f, fix,
+            "0b9e7c7e-6a2f-4c7b-9a0e-3f1d2c4b5a69", who, "front", "pothole", null, 1_790_000_000_123L, 0.8123f, fix,
             Detection(612f, 700f, 780f, 760f, 0.8123f, 0), "day",
             "edge://ARGUS-4F2A1C/processed/pothole/x.jpg", "a".repeat(64), 46211, model,
         )
@@ -33,11 +33,22 @@ class MessagesTest {
 
     @Test fun observationWithoutBusOmitsOptionalIds() {
         val obs = Messages.observation(
-            "0b9e7c7e-6a2f-4c7b-9a0e-3f1d2c4b5a69", who.copy(busId = "", routeId = ""), "rear", 0, 0.5f,
+            "0b9e7c7e-6a2f-4c7b-9a0e-3f1d2c4b5a69", who.copy(busId = "", routeId = ""), "rear", "pothole", null, 0, 0.5f,
             fix.copy(speedMs = null), Detection(0f, 0f, 1f, 1f, 0.5f, 0), "night", null, null, 0, model,
         )
         assertFalse("bus_id" in obs); assertFalse("ego" in obs); assertFalse("evidence" in obs)
         dump("observation-minimal.json", obs.toString())
+    }
+
+    @Test fun damagedRoadCarriesItsCrackType() {
+        val obs = Messages.observation(
+            "5c1d7a52-19a4-4d6e-8f0b-2a3c4d5e6f70", who, "front", "damaged_road", "alligator_crack", 1_790_000_000_500L, 0.61f, fix,
+            Detection(100f, 500f, 700f, 690f, 0.61f, 2), "day",
+            "edge://ARGUS-4F2A1C/processed/damaged_road/y.jpg", "b".repeat(64), 30000, model,
+        )
+        assertEquals("damaged_road", obs["class_id"]!!.jsonPrimitive.content)
+        assertEquals("alligator_crack", obs["subclass"]!!.jsonPrimitive.content)
+        dump("observation-damaged-road.json", obs.toString())
     }
 
     @Test fun telemetryMatchesContractShape() {

@@ -44,6 +44,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.DirectionsCar
+import androidx.compose.material.icons.rounded.DirectionsWalk
+import androidx.compose.material.icons.rounded.Timeline
 import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.GpsFixed
@@ -58,6 +61,8 @@ import androidx.compose.material.icons.rounded.Straighten
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.Wifi
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -103,6 +108,7 @@ import com.argus.edge.processing.EdgeEngine
 import com.argus.edge.processing.EngineState
 import com.argus.edge.processing.Finding
 import com.argus.edge.processing.Fix
+import com.argus.edge.processing.Kind
 import com.argus.edge.processing.TilePreview
 import com.argus.edge.ui.theme.Argus
 import com.argus.edge.ui.theme.Mono
@@ -157,7 +163,8 @@ fun ProcessingScreen(engine: EdgeEngine, prefs: Prefs, onSettings: () -> Unit) {
             if (!state.locationOn) item {
                 Banner("GPS is off or not permitted. Potholes will be kept in processed/ only until there is a fix.", Argus.Warn)
             }
-            item { StatsGrid(state, links.size, counts["pothole"] ?: 0) }
+            item { StatsGrid(state, links.size) }
+            item { DetectorsRow(prefs) }
 
             item {
                 SectionHeader("Cameras · ${links.size}") {
@@ -186,7 +193,7 @@ fun ProcessingScreen(engine: EdgeEngine, prefs: Prefs, onSettings: () -> Unit) {
                 }
             }
 
-            item { SectionHeader("Recent potholes · ${findings.size}") }
+            item { SectionHeader("Recent road defects · ${findings.size}") }
             item { FindingsRow(findings) }
 
             item { SectionHeader("Server hand-off") }
@@ -230,7 +237,7 @@ private fun SessionHero(state: EngineState, cameras: Int, now: Long, onToggle: (
                 Spacer(Modifier.height(4.dp))
                 Text(
                     if (state.running) "Session ${state.sessionId} · ${elapsed(now - state.sessionStartMs)}"
-                    else "Start a session to run pothole detection and write findings.",
+                    else "Start a session to detect potholes, road cracks and traffic, and write findings.",
                     style = MaterialTheme.typography.bodySmall, color = Argus.TextDim,
                 )
             }
@@ -253,20 +260,51 @@ private fun SessionHero(state: EngineState, cameras: Int, now: Long, onToggle: (
 }
 
 @Composable
-private fun StatsGrid(state: EngineState, cameras: Int, records: Int) {
+private fun StatsGrid(state: EngineState, cameras: Int) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             StatTile("Cameras", "$cameras", Icons.Rounded.CameraAlt, Argus.Accent, Modifier.weight(1f), sub = "linked now")
-            StatTile("Potholes", "${state.potholes}", Icons.Rounded.Warning, Argus.Pothole, Modifier.weight(1f), sub = "this session")
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            StatTile("Records", "$records", Icons.Rounded.CloudUpload, Argus.Good, Modifier.weight(1f), sub = "in processed/pothole")
             StatTile(
                 "Inference", "%.1f/s".format(state.inferenceFps), Icons.Rounded.Memory, Argus.Accent, Modifier.weight(1f),
                 sub = if (state.lastInferenceMs > 0) "${state.lastInferenceMs} ms · ${state.inferences} runs" else "not running",
             )
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            StatTile("Potholes", "${state.potholes}", Icons.Rounded.Warning, Argus.Pothole, Modifier.weight(1f), sub = "this session")
+            StatTile("Road cracks", "${state.cracks}", Icons.Rounded.Timeline, Argus.Crack, Modifier.weight(1f), sub = "this session")
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            StatTile("Vehicles", "${state.vehicles}", Icons.Rounded.DirectionsCar, Argus.Accent, Modifier.weight(1f), sub = "unique, counted")
+            StatTile("Pedestrians", "${state.pedestrians}", Icons.Rounded.DirectionsWalk, Argus.Good, Modifier.weight(1f), sub = "unique, counted")
+        }
     }
+}
+
+/** Which prototype detectors run. Takes effect on the next frame. */
+@Composable
+private fun DetectorsRow(prefs: Prefs) {
+    var pot by remember { mutableStateOf(prefs.detectPotholes) }
+    var crk by remember { mutableStateOf(prefs.detectCracks) }
+    var trf by remember { mutableStateOf(prefs.detectTraffic) }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        DetectorChip("Potholes", pot, Argus.Pothole, Modifier.weight(1f)) { pot = it; prefs.detectPotholes = it }
+        DetectorChip("Cracks", crk, Argus.Crack, Modifier.weight(1f)) { crk = it; prefs.detectCracks = it }
+        DetectorChip("Traffic", trf, Argus.Accent, Modifier.weight(1f)) { trf = it; prefs.detectTraffic = it }
+    }
+}
+
+@Composable
+private fun DetectorChip(label: String, on: Boolean, tint: Color, modifier: Modifier, onChange: (Boolean) -> Unit) {
+    FilterChip(
+        selected = on, onClick = { onChange(!on) }, modifier = modifier,
+        label = { Text(label, maxLines = 1) },
+        leadingIcon = { Box(Modifier.size(8.dp).clip(CircleShape).background(if (on) tint else Argus.TextFaint)) },
+        colors = FilterChipDefaults.filterChipColors(
+            containerColor = Argus.Surface, labelColor = Argus.TextDim,
+            selectedContainerColor = tint.copy(alpha = 0.16f), selectedLabelColor = Argus.Text,
+        ),
+        border = FilterChipDefaults.filterChipBorder(enabled = true, selected = on, borderColor = Argus.Outline, selectedBorderColor = tint.copy(alpha = 0.6f)),
+    )
 }
 
 @Composable
@@ -293,9 +331,10 @@ private fun CameraTile(link: CameraLink, preview: TilePreview?, now: Long) {
                             modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(Argus.Warn).padding(horizontal = 8.dp, vertical = 4.dp))
                     }
                 }
-                if (preview?.inferred == true && preview.detections.isNotEmpty()) {
+                val defects = preview?.detections?.count { it.kind.isRoadDefect } ?: 0
+                if (preview?.inferred == true && defects > 0) {
                     Text(
-                        "POTHOLE ×${preview.detections.size}",
+                        "ROAD DEFECT ×$defects",
                         style = MaterialTheme.typography.labelSmall, color = Argus.Void,
                         modifier = Modifier.align(Alignment.TopEnd).padding(10.dp).clip(RoundedCornerShape(6.dp))
                             .background(Argus.Pothole).padding(horizontal = 8.dp, vertical = 4.dp),
@@ -324,11 +363,17 @@ private fun DetectionOverlay(p: TilePreview) {
         val bw = p.bitmap.width.toFloat(); val bh = p.bitmap.height.toFloat()
         val s = minOf(size.width / bw, size.height / bh)
         val ox = (size.width - bw * s) / 2; val oy = (size.height - bh * s) / 2
-        for (d in p.detections) {
+        for (l in p.detections) {
+            val d = l.det
             val tl = Offset(ox + d.x1 * s, oy + d.y1 * s)
             val sz = Size(d.width * s, d.height * s)
-            drawRect(Argus.Pothole.copy(alpha = 0.18f), tl, sz)
-            drawRect(Argus.Pothole, tl, sz, style = Stroke(3.dp.toPx()))
+            val c = kindColor(l.kind)
+            if (l.kind.isRoadDefect) {
+                drawRect(c.copy(alpha = 0.18f), tl, sz)
+                drawRect(c, tl, sz, style = Stroke(3.dp.toPx()))
+            } else {
+                drawRect(c, tl, sz, style = Stroke(1.5.dp.toPx()))
+            }
         }
     }
 }
@@ -402,7 +447,7 @@ private fun LocationPanel(fix: Fix?, now: Long, odometer: Double, gate: GateMode
 @Composable
 private fun FindingsRow(findings: List<Finding>) {
     if (findings.isEmpty()) {
-        Panel { Text("No potholes yet this run. They appear here the moment one is detected.", style = MaterialTheme.typography.bodySmall, color = Argus.TextDim) }
+        Panel { Text("No road defects yet this run. Potholes and cracks appear here the moment one is detected.", style = MaterialTheme.typography.bodySmall, color = Argus.TextDim) }
         return
     }
     val fmt = remember { SimpleDateFormat("HH:mm:ss", Locale.US) }
@@ -413,10 +458,11 @@ private fun FindingsRow(findings: List<Finding>) {
                     Image(f.thumb.asImageBitmap(), null, Modifier.fillMaxWidth().height(110.dp), contentScale = ContentScale.Crop)
                     Column(Modifier.padding(10.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("${(f.confidence * 100).toInt()}%", style = MaterialTheme.typography.titleSmall.copy(fontFamily = Mono), color = Argus.Pothole)
+                            Text("${(f.confidence * 100).toInt()}%", style = MaterialTheme.typography.titleSmall.copy(fontFamily = Mono), color = kindColor(f.kind))
                             Spacer(Modifier.weight(1f))
                             Text(f.cameraId.uppercase(), style = MaterialTheme.typography.labelSmall, color = Argus.TextDim)
                         }
+                        Text(f.kind.label, style = MaterialTheme.typography.labelMedium, color = Argus.Text, maxLines = 1)
                         Text(fmt.format(Date(f.atMs)), style = MaterialTheme.typography.bodySmall.copy(fontFamily = Mono), color = Argus.TextFaint)
                         Text(
                             if (f.saved) "saved" else "no GPS · logged only",
@@ -541,4 +587,11 @@ private fun elapsed(ms: Long): String {
         s < 3600 -> "${s / 60}m ${s % 60}s"
         else -> "${s / 3600}h ${(s % 3600) / 60}m"
     }
+}
+
+private fun kindColor(k: Kind): Color = when {
+    k == Kind.POTHOLE -> Argus.Pothole
+    k.isRoadDefect -> Argus.Crack
+    k == Kind.PEDESTRIAN -> Argus.Good
+    else -> Argus.Accent
 }

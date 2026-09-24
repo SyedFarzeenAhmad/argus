@@ -1,13 +1,13 @@
 # `edge-app/` — CV–Edge, the Android app
 
-**Camera phones stream in; the processing client finds potholes, keeps the record, and
-collects training data.** One Kotlin APK, installed on every phone on the bus. On first launch
+**Camera phones stream in; the processing client finds potholes and road cracks, counts
+vehicles and pedestrians, keeps the record, and collects training data.** One Kotlin APK, installed on every phone on the bus. On first launch
 the home screen asks what this phone is:
 
 | Role | Phones | Does |
 |---|---|---|
 | **Camera** | 1…N (MVP: `front`, `rear`) | Live preview. Pick a position, link to a processing client, stream. Stores nothing. |
-| **Processing client** | 1 per bus | Accepts any number of cameras, runs pothole detection on every stream, writes findings to `processed/<category>/`, optionally records training frames to `dataset/`, and serves `processed/` to the backend (read-only). |
+| **Processing client** | 1 per bus | Accepts any number of cameras, runs three detectors on every stream, writes findings to `processed/<category>/`, optionally records training frames to `dataset/`, and serves `processed/` to the backend (read-only). |
 
 ```
   camera phone (front) ─┐  JPEG frames over TCP :7070        ┌────────────────────────┐
@@ -19,17 +19,30 @@ the home screen asks what this phone is:
                                    the read-only API (never deletes)     ▼
 ```
 
+## What it detects (v0.3.0)
+
+| Detector | Model (prototype) | Runs | Writes |
+|---|---|---|---|
+| **Potholes** | YOLO11n — `tahaUgan/pothole-yolo11n` | every 5 m | `processed/pothole/` — contract `Observation` |
+| **Road cracks** — longitudinal, transverse, alligator | YOLOv8n on RDD2022 — `dronefreak/rdd2022-yolov8n` (test mAP@50 58.8%) | every 5 m | `processed/damaged_road/` — `Observation`, `class_id: damaged_road` + `subclass` |
+| **Traffic** — car, two-wheeler, bus, truck, bicycle, pedestrian | YOLO11n COCO + IoU tracker | 4 fps per camera | `processed/traffic_counting/` — unique counts per camera per 30 s |
+
+Each can be switched off on the processing screen (Potholes / Cracks / Traffic chips) to save
+compute. Known gaps: **no auto-rickshaw class** (COCO lacks it), the simple tracker can
+over-count fast oncoming traffic, cracks are boxes rather than % distressed area, and all three
+models are untested on Bengaluru roads — see [`docs/02`](../docs/02-detection-taxonomy.md#mvp-status).
+
 Design: [`docs/03`](../docs/03-cv-pipeline.md#on-bus-topology). Backend hand-off:
 [`docs/04`](../docs/04-backend.md#edge-processed-consumer). Decision record: D11 in
 [the design of record](../docs/superpowers/specs/2026-09-22-argus-platform-design.md).
 
 ## Install and run
 
-The release APK is committed: **`release/argus-edge-0.2.0.apk`** (arm64-v8a + armeabi-v7a,
-Android 8.0+). It contains the pothole model, so nothing else is needed on the phone.
+The release APK is committed: **`release/argus-edge-0.3.0.apk`** (arm64-v8a + armeabi-v7a,
+Android 8.0+, 78 MB). It contains all three models, so nothing else is needed on the phone.
 
 ```bash
-adb install -r release/argus-edge-0.2.0.apk     # or copy the APK to the phone and open it
+adb install -r release/argus-edge-0.3.0.apk     # or copy the APK to the phone and open it
 ```
 
 1. Put all phones on **one network** — the processing phone's hotspot, or the bus Wi-Fi.
@@ -38,8 +51,9 @@ adb install -r release/argus-edge-0.2.0.apk     # or copy the APK to the phone a
 3. **Each camera phone:** open ARGUS → *Camera* → pick *Front* / *Rear* / … → tap the processing
    client in the list (or type its address). It streams, and after a reboot it re-links by
    itself.
-4. **Processing phone:** press ▶. Camera tiles show live frames; potholes get boxes, a thumbnail
-   in *Recent potholes*, and a record in `processed/pothole/`.
+4. **Processing phone:** press ▶. Camera tiles show live frames with boxes — potholes amber,
+   cracks pink, vehicles blue, pedestrians green. Road defects also get a thumbnail in *Recent
+   road defects* and a record in `processed/`.
 5. **Collecting training data:** switch on *Record training frames*. Camera phones switch to
    1080p immediately (their screen shows *Dataset · 1080p*).
 
@@ -53,21 +67,24 @@ every 10 m; a stopped bus does neither); *Every 0.5 s (test)* is for bench tests
 
 ```
 processed/
-├── pothole/     <utc>-<id>.json        contract Observation (only with a GPS fix)
-│                <utc>-<id>.jpg         evidence crop
-│                <utc>-<id>-frame.jpg   full frame, box drawn, for review
-├── telemetry/   <utc>.json             contract Telemetry, every 30 s
+├── pothole/          <utc>-<id>.json         contract Observation (only with a GPS fix)
+│                     <utc>-<id>.jpg          evidence crop
+│                     <utc>-<camera>-frame.jpg  full frame, every box drawn, for review
+├── damaged_road/     same layout, class_id damaged_road + subclass (crack type)
+├── traffic_counting/ <utc>-<camera>.json     unique vehicles + pedestrians per 30 s (interim format)
+├── telemetry/        <utc>.json              contract Telemetry, every 30 s
 └── log/         <session>.jsonl        every inference on every camera, incl. nothing-found
 dataset/
 └── <session>_<route>/
     ├── session.json
     ├── manifest.jsonl                  per frame: time, camera, GNSS, speed, heading, light
     ├── frames/<camera>/<utc>_<seq>.jpg clean frame exactly as streamed, nothing drawn
-    └── prelabels/<camera>/<utc>_<seq>.txt  prototype boxes, YOLO format, for CVAT import
+    ├── prelabels/<camera>/<utc>_<seq>.txt  prototype road-defect boxes, YOLO format, for CVAT
+    └── classes.txt                     0 pothole, 1 longitudinal, 2 transverse, 3 alligator crack
 ```
 
-- **Categories appear as models land.** Today: `pothole`, `telemetry`. Next: `incidents`,
-  `traffic_counting`, … with the same file conventions.
+- **Categories appear as models land.** Today: `pothole`, `damaged_road`, `traffic_counting`,
+  `telemetry`. Next: `incidents`, … with the same file conventions.
 - **Nothing is deleted by the backend.** Clear the phone by hand (or `adb shell rm`) when needed.
 - **Dataset capture** saves a frame every 10 m from every camera **whether or not a pothole was
   seen**, stops itself below 1 GB free, and is pulled with
@@ -97,20 +114,21 @@ The backend consumer (cursor per device and category, no deletes) is specified i
 |---|---|
 | Camera / processing roles, N cameras, discovery + manual address, auto re-link | Foreground service (the processing screen keeps itself awake instead) |
 | Streaming with capture-time clock sync and flow control; 1080p switch for capture | H.264/RTSP transport (MVP sends JPEG frames) |
-| Pothole detection (YOLO11n, ONNX Runtime CPU) on every camera | Other classes; NPU/INT8 execution |
+| Potholes, road cracks, vehicle + pedestrian counting (ONNX Runtime CPU) on every camera | Other classes, auto-rickshaws; NPU/INT8 execution |
 | Distance-gated detection and dataset capture; GNSS jump rejection | IPM: `geo` is the **bus's** position (`source: "gnss"`), not the pothole's |
 | `processed/<category>/`, contract-valid JSON, read-only API | Face blurring — deferred ([`docs/08`](../docs/08-privacy-and-compliance.md#face-blurring-deferred)) |
 | Dataset capture with manifest and YOLO pre-labels | Calibrated confidence; MQTT uplink |
 
-**The model is a prototype.** `tahaUgan/pothole-yolo11n` from Hugging Face (weights CC-BY-4.0,
-trained with Ultralytics, which is AGPL-3.0 — see [`docs/03`](../docs/03-cv-pipeline.md#model-licensing)).
-Not trained on Bengaluru roads; accuracy here unmeasured. Replace it by dropping CV-Perception's
-`pothole.onnx` into `app/src/main/assets/models/` (same YOLO detect output, class 0 = pothole).
+**The models are prototypes.** All three are public weights trained with Ultralytics, which is
+AGPL-3.0 (see [`docs/03`](../docs/03-cv-pipeline.md#model-licensing)); none was trained on
+Bengaluru roads, and accuracy here is unmeasured. CV-Perception replaces them file by file in
+`app/src/main/assets/models/` — `pothole.onnx`, `road_damage.onnx`, `traffic.onnx` — keeping the
+YOLO detect output and the class indices in `processing/Models.kt`.
 
 ## Build
 
 ```bash
-scripts/fetch_model.sh                 # downloads + exports pothole.onnx (weights are not in git)
+scripts/fetch_models.sh                # downloads + exports the three models (weights are not in git)
 ./gradlew assembleRelease              # needs JDK 17 + Android SDK 35
 cp app/build/outputs/apk/release/app-release.apk release/argus-edge-<version>.apk
 ```
@@ -121,16 +139,18 @@ Replace it with a real signing key before any fleet deployment.
 ## Tests
 
 ```bash
-./gradlew testDebugUnitTest                                           # 14 JVM tests
+./gradlew testDebugUnitTest                                           # 20 JVM tests
 uv run --with jsonschema --with referencing python scripts/validate_contracts.py
 ```
 
 - Detection maths: letterbox, YOLO decode, NMS
 - Wire protocol round-trip, stream config, clock-sync estimator, distance/time gate
+- Tracker counting: one vehicle counted once, class flicker, leave-and-return, crowds
 - Contract shape: sample `Observation` / `Telemetry` validated against `contracts/schemas/`
 
 Verified end to end on two Android emulators (processing + camera): streaming with clock sync,
-detection on a pothole test video, live `processed/` records validating against the schemas,
+detection on a mixed test video (potholes, Japanese RDD2022 crack scenes, a street with a bus
+and pedestrians), live `processed/` records validating against the schemas,
 the read-only API and its cursor, and dataset capture (clean frames with and without potholes,
 manifest, YOLO pre-labels matching the pixel boxes). **Not yet run on physical phones.**
 
@@ -142,7 +162,7 @@ app/src/main/java/com/argus/edge/
 ├── core/         prefs, time formats, network helpers
 ├── link/         wire protocol, stream config, clock sync, discovery, frame server + client
 ├── camera/       CameraX analyzer → JPEG → frame client
-├── processing/   detector (ONNX), decode + NMS, GNSS tracker, frame gate, storage,
+├── processing/   models + YOLO detector (ONNX), decode + NMS, IoU tracker, GNSS tracker, frame gate, storage,
 │                 contract messages, dataset recorder, local API, video test source,
 │                 EdgeEngine (the loop)
 └── ui/           theme, components, role / camera / processing screens, settings

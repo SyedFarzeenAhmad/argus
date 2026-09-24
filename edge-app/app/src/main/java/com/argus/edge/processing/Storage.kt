@@ -12,15 +12,17 @@ import java.io.FileOutputStream
  * /sdcard/Android/data/com.argus.edge/files/argus — so no storage permission, and `adb pull` works.
  *
  *   processed/                 findings, one subfolder per category
- *     pothole/                   <utc>-<id>.json   contract Observation
+ *     pothole/                   <utc>-<id>.json   contract Observation (class_id pothole)
  *                                <utc>-<id>.jpg    its evidence crop
- *                                <utc>-<id>-frame.jpg  the full frame, boxes drawn, for review
+ *                                <utc>-<camera>-frame.jpg  the full frame, boxes drawn, for review
+ *     damaged_road/              same, class_id damaged_road + subclass (crack type)
+ *     traffic_counting/          <utc>-<camera>.json  unique vehicle/pedestrian counts per 30 s
  *     telemetry/                 <utc>.json        contract Telemetry, every 30 s
  *     log/                       <session>.jsonl   one line per inference, every camera
  *   dataset/<session>/         clean frames for training (DatasetRecorder)
  *
  * The backend reads processed/<category>/ over the local API and does NOT delete: the phone
- * keeps its record. Categories are added as their models land (incidents, traffic_counting, …).
+ * keeps its record. Categories are added as their models land (incidents, …).
  */
 class Storage(context: Context) {
     val root: File = File(context.getExternalFilesDir(null) ?: context.filesDir, "argus")
@@ -89,7 +91,7 @@ class Storage(context: Context) {
 
     companion object {
         /** Only categories with a model behind them today. */
-        val CATEGORIES = listOf("pothole", "telemetry")
+        val CATEGORIES = listOf("pothole", "damaged_road", "traffic_counting", "telemetry")
         val NAME = Regex("^[A-Za-z0-9._-]{1,128}$")
     }
 }

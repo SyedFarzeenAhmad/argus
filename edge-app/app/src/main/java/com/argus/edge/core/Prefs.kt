@@ -53,6 +53,19 @@ class Prefs(context: Context) {
             ?: GateMode.DISTANCE
         set(v) = sp.edit().putString("gate", v.name).apply()
 
+    /** Which prototype detectors run. Each costs edge-phone compute; switch off what you don't need. */
+    var detectPotholes: Boolean
+        get() = sp.getBoolean("det_pothole", true)
+        set(v) = sp.edit().putBoolean("det_pothole", v).apply()
+
+    var detectCracks: Boolean
+        get() = sp.getBoolean("det_cracks", true)
+        set(v) = sp.edit().putBoolean("det_cracks", v).apply()
+
+    var detectTraffic: Boolean
+        get() = sp.getBoolean("det_traffic", true)
+        set(v) = sp.edit().putBoolean("det_traffic", v).apply()
+
     /** Dataset capture: clean frames for training, every [captureSpacingM] metres. */
     var captureEnabled: Boolean
         get() = sp.getBoolean("capture", false)

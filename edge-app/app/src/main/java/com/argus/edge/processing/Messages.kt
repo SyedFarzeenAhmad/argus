@@ -11,7 +11,7 @@ import java.security.MessageDigest
 
 /** Builds messages in the exact shape of contracts/schemas/. Pure Kotlin, so it is unit-tested. */
 object Messages {
-    const val SCHEMA_VERSION = "1.0.0"
+    const val SCHEMA_VERSION = "1.1.0"
     val CAMERA_IDS = listOf("front", "rear", "left", "right", "cabin")
 
     data class ModelInfo(val name: String, val version: String, val runtime: String, val inputRes: String)
@@ -22,6 +22,8 @@ object Messages {
         id: String,
         who: Identity,
         cameraId: String,
+        classId: String,
+        subclass: String?,
         capturedAtMs: Long,
         confidence: Float,
         fix: Fix,
@@ -38,7 +40,8 @@ object Messages {
         if (who.busId.isNotBlank()) put("bus_id", who.busId)
         if (who.routeId.isNotBlank()) put("route_id", who.routeId)
         put("camera_id", cameraId)
-        put("class_id", "pothole")
+        put("class_id", classId)
+        if (subclass != null) put("subclass", subclass)
         put("captured_at", Time.rfc3339(capturedAtMs))
         put("confidence", round(confidence.toDouble(), 4))
         // MVP: this is the BUS's position (source "gnss"). IPM, which places the pothole itself,
@@ -95,6 +98,44 @@ object Messages {
             }
             put("gnss_fix", if (fix.accuracyM < 20f) "3d" else "2d")
         }
+        putModel(model)
+    }
+
+    /**
+     * Vehicle and pedestrian counts for one camera over one window. INTERIM format, not a contract
+     * message: the contract home for these counts is SegmentPass, which needs a road segment id —
+     * i.e. map matching, not built yet. Keys match SegmentPass.traffic.vehicle_counts so the
+     * backend's mapping is one-to-one when it lands.
+     */
+    fun trafficWindow(
+        who: Identity, w: TrafficWindow, endMs: Long, start: Fix?, end: Fix?, distanceM: Double, model: ModelInfo,
+    ): JsonObject = buildJsonObject {
+        put("format", "argus.edge.traffic_window/0.1")
+        put("device_id", who.deviceId)
+        if (who.busId.isNotBlank()) put("bus_id", who.busId)
+        if (who.routeId.isNotBlank()) put("route_id", who.routeId)
+        put("camera_id", w.cameraId)
+        put("started_at", Time.rfc3339(w.startMs))
+        put("ended_at", Time.rfc3339(endMs))
+        start?.let { putJsonObject("gnss_start") { put("lat", round(it.lat, 7)); put("lon", round(it.lon, 7)); put("accuracy_m", round(it.accuracyM.toDouble(), 1)) } }
+        end?.let { putJsonObject("gnss_end") { put("lat", round(it.lat, 7)); put("lon", round(it.lon, 7)); put("accuracy_m", round(it.accuracyM.toDouble(), 1)) } }
+        put("distance_m", round(distanceM, 1))
+        val secs = (endMs - w.startMs) / 1000.0
+        if (secs > 0) put("mean_speed_kmh", round(distanceM / secs * 3.6, 1))
+        putJsonObject("vehicle_counts") {
+            put("car", w.unique[Kind.CAR] ?: 0)
+            put("two_wheeler", w.unique[Kind.TWO_WHEELER] ?: 0)
+            put("auto_rickshaw", 0)  // not detectable with COCO weights — see Models.TRAFFIC
+            put("bus", w.unique[Kind.BUS] ?: 0)
+            put("truck", w.unique[Kind.TRUCK] ?: 0)
+            put("bicycle", w.unique[Kind.BICYCLE] ?: 0)
+        }
+        putJsonObject("pedestrians") {
+            put("unique_tracks", w.unique[Kind.PEDESTRIAN] ?: 0)
+            put("max_simultaneous", w.maxPedestriansInFrame)
+        }
+        put("mean_vehicles_in_frame", round(w.meanVehiclesInFrame.toDouble(), 2))
+        put("frames_processed", w.frames)
         putModel(model)
     }
 

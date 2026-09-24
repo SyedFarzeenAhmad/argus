@@ -9,6 +9,7 @@ import android.graphics.Paint
 import android.net.Uri
 import android.util.Log
 import com.argus.edge.BuildConfig
+import com.argus.edge.core.GateMode
 import com.argus.edge.core.Net
 import com.argus.edge.core.Prefs
 import com.argus.edge.core.Time
@@ -50,6 +51,9 @@ data class EngineState(
     val sessionStartMs: Long = 0,
     val inferences: Long = 0,
     val potholes: Long = 0,
+    val cracks: Long = 0,
+    val vehicles: Long = 0,
+    val pedestrians: Long = 0,
     val recordsWritten: Long = 0,
     val inferenceFps: Float = 0f,
     val lastInferenceMs: Long = 0,
@@ -62,22 +66,27 @@ data class EngineState(
 )
 
 /** What a camera tile shows: a downscaled frame and, just after an inference, its boxes. */
-class TilePreview(val bitmap: Bitmap, val detections: List<Detection>, val atMs: Long, val inferred: Boolean)
+class TilePreview(val bitmap: Bitmap, val detections: List<Labeled>, val atMs: Long, val inferred: Boolean)
 
 class Finding(
     val id: String,
     val cameraId: String,
+    val kind: Kind,
     val confidence: Float,
     val atMs: Long,
     val thumb: Bitmap,
-    /** Saved to processed/pothole/ (false = no GPS fix, logged only). */
+    /** Saved to processed/<category>/ (false = no GPS fix, logged only). */
     val saved: Boolean,
 )
 
 /**
  * The processing client. Owns the frame server (cameras link to it), discovery, the GNSS
- * tracker, the local API, and — while a session runs — the inference loop that turns frames
- * into processed/ records and, when dataset capture is on, dataset/ training frames.
+ * tracker, the local API, and — while a session runs — the loop that runs three prototype
+ * models over every camera:
+ *
+ *   road defects   pothole + crack models, every 5 m        → processed/pothole/, damaged_road/
+ *   traffic        vehicle/pedestrian model, 4 fps, tracked → processed/traffic_counting/
+ *   dataset        clean frames every 10 m (optional)       → dataset/
  */
 class EdgeEngine(private val context: Context, private val prefs: Prefs) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -90,11 +99,19 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
     private val videoSource = VideoFileSource(context, server, scope)
     private var api: LocalApi? = null
 
-    private var detector: PotholeDetector? = null
-    private val gate = FrameGate()
+    private var potholeModel: YoloDetector? = null
+    private var damageModel: YoloDetector? = null
+    private var trafficModel: YoloDetector? = null
+
+    private val roadGate = FrameGate()
+    private var trafficGate = FrameGate(intervalMs = 1000L / TRAFFIC_FPS)
     private var captureGate = FrameGate(metres = prefs.captureSpacingM.toDouble(), intervalMs = 1000)
     val dataset = DatasetRecorder(storage)
     private val inferFps = FpsCounter()
+
+    private val trackers = HashMap<String, IouTracker>()
+    private val windows = HashMap<String, TrafficWindow>()
+    private val windowStartOdo = HashMap<String, Double>()
 
     private var sessionJob: Job? = null
     private var previewJob: Job? = null
@@ -156,18 +173,23 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
         val now = System.currentTimeMillis()
         val id = Time.sessionId(now)
         sessionId = id
-        gate.reset()
+        roadGate.reset(); trafficGate.reset()
         captureGate = FrameGate(metres = prefs.captureSpacingM.toDouble(), intervalMs = 1000)
+        trackers.clear(); windows.clear(); windowStartOdo.clear()
         _state.update {
-            it.copy(running = true, sessionId = id, sessionStartMs = now, inferences = 0, potholes = 0,
-                recordsWritten = 0, notice = null)
+            it.copy(running = true, sessionId = id, sessionStartMs = now, inferences = 0, potholes = 0, cracks = 0,
+                vehicles = 0, pedestrians = 0, recordsWritten = 0, notice = null)
         }
         sessionJob = scope.launch(inferenceDispatcher) {
             if (!loadModels()) { _state.update { it.copy(running = false) }; return@launch }
             storage.appendLine(storage.logFile(id), buildJsonObject { put("session", sessionJson(id, now)) }.toString())
             if (prefs.captureEnabled) dataset.begin(id, sessionJson(id, now), prefs.routeId)
             launch(Dispatchers.IO) { telemetryLoop() }
-            inferenceLoop(id)
+            try {
+                inferenceLoop(id)
+            } finally {
+                flushTraffic(force = true)
+            }
         }
     }
 
@@ -200,17 +222,16 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
 
     fun stopTestVideo() = videoSource.stop()
 
-    private fun loadModels(): Boolean {
-        if (detector != null) return true
-        return try {
-            detector = PotholeDetector(context)
-            _state.update { it.copy(modelReady = true, modelError = null) }
-            true
-        } catch (e: Throwable) {
-            Log.e(TAG, "model load failed", e)
-            _state.update { it.copy(modelReady = false, modelError = e.message ?: e.javaClass.simpleName) }
-            false
-        }
+    private fun loadModels(): Boolean = try {
+        potholeModel = potholeModel ?: YoloDetector(context, Models.POTHOLE)
+        damageModel = damageModel ?: YoloDetector(context, Models.ROAD_DAMAGE)
+        trafficModel = trafficModel ?: YoloDetector(context, Models.TRAFFIC)
+        _state.update { it.copy(modelReady = true, modelError = null) }
+        true
+    } catch (e: Throwable) {
+        Log.e(TAG, "model load failed", e)
+        _state.update { it.copy(modelReady = false, modelError = e.message ?: e.javaClass.simpleName) }
+        false
     }
 
     // ── the loop ────────────────────────────────────────────────────────────
@@ -225,72 +246,92 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
                 val f = server.latest(cam) ?: continue
                 if (f.seq == lastSeq[cam]) continue
                 val now = System.currentTimeMillis()
-                // Capture (every 10 m) and detection (every 5 m) are gated independently; a
-                // captured frame is always also run through the model, for its pre-labels.
-                val capture = dataset.active && captureGate.shouldInfer(cam, prefs.gateMode, location.odometerM, now)
-                val infer = gate.shouldInfer(cam, prefs.gateMode, location.odometerM, now)
-                if (!capture && !infer) continue
+                val odo = location.odometerM
+                // Three independent gates. Road defects and dataset frames sample by distance;
+                // traffic samples by time, because tracking needs continuity.
+                val capture = dataset.active && captureGate.shouldInfer(cam, prefs.gateMode, odo, now)
+                val road = (prefs.detectPotholes || prefs.detectCracks) && roadGate.shouldInfer(cam, prefs.gateMode, odo, now)
+                val traffic = prefs.detectTraffic && trafficGate.shouldInfer(cam, GateMode.TIME, odo, now)
+                if (!capture && !road && !traffic) continue
                 lastSeq[cam] = f.seq
                 worked = true
-                runCatching { process(f, log, capture) }.onFailure { Log.e(TAG, "process $cam", it) }
+                runCatching { process(f, log, capture, road || capture, traffic) }.onFailure { Log.e(TAG, "process $cam", it) }
             }
+            flushTraffic(force = false)
             if (!worked) delay(15)
         }
     }
 
-    private fun process(f: ReceivedFrame, log: File, capture: Boolean) {
+    private fun process(f: ReceivedFrame, log: File, capture: Boolean, road: Boolean, traffic: Boolean) {
         val bmp = BitmapFactory.decodeByteArray(f.jpeg, 0, f.jpeg.size) ?: return
-        val det = detector ?: return
         val t0 = System.nanoTime()
-        val dets = det.detect(bmp, prefs.confidenceThreshold).filter { plausible(bmp, it) }
+        val conf = prefs.confidenceThreshold
+
+        val roadDets = ArrayList<Labeled>()
+        if (road) {
+            if (prefs.detectPotholes) potholeModel?.let { m -> m.detect(bmp, conf).forEach { roadDets += Labeled(it, m.spec.keep.getValue(it.classId)) } }
+            if (prefs.detectCracks) damageModel?.let { m ->
+                m.detect(bmp, maxOf(conf, m.spec.defaultConfidence)).forEach { roadDets += Labeled(it, m.spec.keep.getValue(it.classId)) }
+            }
+        }
+        roadDets.retainAll { plausible(bmp, it.det) }
+
+        var trafficDets: List<Labeled> = emptyList()
+        if (traffic) trafficModel?.let { m ->
+            trafficDets = m.detect(bmp, conf).map { Labeled(it, m.spec.keep.getValue(it.classId)) }
+            countTraffic(f.cameraId, f.captureMs, trafficDets)
+        }
+
         val inferMs = (System.nanoTime() - t0) / 1_000_000
         val now = System.currentTimeMillis()
         inferFps.tick(now)
 
         val fix = location.at(f.captureMs)
         val who = Messages.Identity(prefs.deviceId, prefs.busId, prefs.routeId)
-        val model = modelInfo(det)
         val stamp = Time.compact(f.captureMs)
-        val saved = if (dets.isEmpty()) "none" else if (fix == null) "no_gnss_fix" else "saved"
-        val obsIds = dets.map { UUID.randomUUID().toString() }
+        val saved = if (roadDets.isEmpty()) "none" else if (fix == null) "no_gnss_fix" else "saved"
+        val ids = roadDets.map { UUID.randomUUID().toString() }
         val illum = Messages.illumination(meanLuma(bmp))
 
-        if (capture) dataset.record(f, fix, location.odometerM, illum, dets, model)
+        if (capture) dataset.record(f, fix, location.odometerM, illum, roadDets, listOfNotNull(potholeModel?.info, damageModel?.info))
 
-        if (dets.isNotEmpty()) {
-            // processed/pothole/: a contract Observation needs a position, so without a GPS fix
-            // the detection is logged (below) but no record is written.
+        if (roadDets.isNotEmpty()) {
+            // A contract Observation needs a position: without a GPS fix the detection is
+            // logged (below) but no record is written.
             if (fix != null) {
-                val annotated = annotate(bmp, dets)
-                val frameJpeg = jpeg(annotated, 85)
-                annotated.recycle()
-                dets.forEachIndexed { i, d ->
-                    val id = obsIds[i]
+                // One annotated frame per category per frame, however many boxes are on it.
+                roadDets.map { it.kind.category }.distinct().forEach { category ->
+                    val annotated = annotate(bmp, roadDets.filter { it.kind.category == category })
+                    storage.writeRecord(category, "$stamp-${f.cameraId}-frame.jpg", jpeg(annotated, 85))
+                    annotated.recycle()
+                }
+            }
+            roadDets.forEachIndexed { i, l ->
+                val id = ids[i]
+                val crop = crop(bmp, l.det)
+                if (fix != null) {
                     val base = "$stamp-$id"
-                    val crop = crop(bmp, d)
                     val cropJpeg = jpeg(crop, 90)
-                    storage.writeRecord("pothole", "$base.jpg", cropJpeg)
-                    storage.writeRecord("pothole", "$base-frame.jpg", frameJpeg)
+                    storage.writeRecord(l.kind.category, "$base.jpg", cropJpeg)
+                    val model = if (l.kind == Kind.POTHOLE) potholeModel!!.info else damageModel!!.info
                     val obs = Messages.observation(
-                        id, who, f.cameraId, f.captureMs, d.score, fix, d, illum,
-                        evidenceUri = "edge://${who.deviceId}/processed/pothole/$base.jpg",
+                        id, who, f.cameraId,
+                        classId = l.kind.category,
+                        subclass = if (l.kind == Kind.POTHOLE) null else l.kind.name.lowercase(),
+                        capturedAtMs = f.captureMs, confidence = l.det.score, fix = fix, bbox = l.det,
+                        illumination = illum,
+                        evidenceUri = "edge://${who.deviceId}/processed/${l.kind.category}/$base.jpg",
                         evidenceSha256 = Messages.sha256Hex(cropJpeg),
                         evidenceBytes = cropJpeg.size,
                         model = model,
                     )
-                    storage.writeRecord("pothole", "$base.json", obs.toString().toByteArray())
-                    addFinding(Finding(id, f.cameraId, d.score, f.captureMs, thumb(crop), saved = true))
-                    crop.recycle()
+                    storage.writeRecord(l.kind.category, "$base.json", obs.toString().toByteArray())
                 }
-            } else {
-                dets.forEachIndexed { i, d ->
-                    val crop = crop(bmp, d)
-                    addFinding(Finding(obsIds[i], f.cameraId, d.score, f.captureMs, thumb(crop), saved = false))
-                    crop.recycle()
-                }
+                addFinding(Finding(id, f.cameraId, l.kind, l.det.score, f.captureMs, thumb(crop), saved = fix != null))
+                crop.recycle()
             }
-            showInferred(f.cameraId, bmp, dets)
         }
+        if (roadDets.isNotEmpty() || trafficDets.isNotEmpty()) showInferred(f.cameraId, bmp, roadDets + trafficDets, holdMs = if (roadDets.isNotEmpty()) 1500 else 300)
 
         storage.appendLine(log, buildJsonObject {
             put("captured_at", Time.rfc3339(f.captureMs))
@@ -299,18 +340,20 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
             put("stream_latency_ms", f.arrivedMs - f.captureMs)
             put("inference_ms", inferMs)
             put("frame_px", "${bmp.width}x${bmp.height}")
+            putJsonArray("ran") { if (road) add("road"); if (traffic) add("traffic"); if (capture) add("dataset") }
             if (fix != null) putJsonObject("gnss") {
                 put("lat", fix.lat); put("lon", fix.lon); put("accuracy_m", fix.accuracyM)
                 fix.speedMs?.let { put("speed_ms", it) }
             }
             put("odometer_m", location.odometerM)
-            put("dataset_frame", capture)
             putJsonArray("detections") {
-                dets.forEachIndexed { i, d -> addJsonObject {
-                    put("observation_id", obsIds[i])
-                    put("confidence", d.score)
-                    putJsonArray("bbox_px") { add(d.x1); add(d.y1); add(d.x2); add(d.y2) }
+                roadDets.forEachIndexed { i, l -> addJsonObject {
+                    put("id", ids[i]); put("kind", l.kind.name.lowercase()); put("confidence", l.det.score)
+                    putJsonArray("bbox_px") { add(l.det.x1); add(l.det.y1); add(l.det.x2); add(l.det.y2) }
                 } }
+            }
+            if (traffic) putJsonObject("traffic_in_frame") {
+                trafficDets.groupingBy { it.kind }.eachCount().forEach { (k, n) -> put(k.name.lowercase(), n) }
             }
             put("record", saved)
         }.toString())
@@ -319,16 +362,49 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
         _state.update {
             it.copy(
                 inferences = it.inferences + 1,
-                potholes = it.potholes + dets.size,
-                recordsWritten = it.recordsWritten + if (saved == "saved") dets.size else 0,
+                potholes = it.potholes + roadDets.count { d -> d.kind == Kind.POTHOLE },
+                cracks = it.cracks + roadDets.count { d -> d.kind.category == "damaged_road" },
+                recordsWritten = it.recordsWritten + if (saved == "saved") roadDets.size else 0,
                 inferenceFps = inferFps.fps(now),
                 lastInferenceMs = inferMs,
                 notice = when (saved) {
-                    "no_gnss_fix" -> "No GPS fix — potholes are logged but not saved as records until there is a position"
+                    "no_gnss_fix" -> "No GPS fix — road defects are logged but not saved as records until there is a position"
                     "saved" -> null
                     else -> it.notice
                 },
             )
+        }
+    }
+
+    // ── traffic counting ────────────────────────────────────────────────────
+
+    private fun countTraffic(cam: String, atMs: Long, dets: List<Labeled>) {
+        val tracker = trackers.getOrPut(cam) { IouTracker() }
+        val window = windows.getOrPut(cam) { windowStartOdo[cam] = location.odometerM; TrafficWindow(cam, atMs) }
+        val confirmed = tracker.update(dets)
+        window.add(confirmed, tracker.visible())
+        if (confirmed.isNotEmpty()) _state.update {
+            it.copy(
+                vehicles = it.vehicles + confirmed.count { t -> t.kind != Kind.PEDESTRIAN },
+                pedestrians = it.pedestrians + confirmed.count { t -> t.kind == Kind.PEDESTRIAN },
+            )
+        }
+    }
+
+    /** Writes every window older than [TRAFFIC_WINDOW_MS] (or all, when the session ends). */
+    private fun flushTraffic(force: Boolean) {
+        val now = System.currentTimeMillis()
+        val model = trafficModel?.info ?: return
+        val who = Messages.Identity(prefs.deviceId, prefs.busId, prefs.routeId)
+        for ((cam, w) in windows.toMap()) {
+            if (!force && now - w.startMs < TRAFFIC_WINDOW_MS) continue
+            windows.remove(cam)
+            if (w.frames == 0) continue
+            val msg = Messages.trafficWindow(
+                who, w, now, location.at(w.startMs), location.at(now),
+                distanceM = location.odometerM - (windowStartOdo[cam] ?: location.odometerM), model = model,
+            )
+            runCatching { storage.writeRecord("traffic_counting", "${Time.compact(w.startMs)}-$cam.json", msg.toString().toByteArray()) }
         }
     }
 
@@ -338,16 +414,16 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
             val fix = location.latest.value ?: continue
             val now = System.currentTimeMillis()
             if (now - fix.wallMs > 10_000) continue
-            val det = detector ?: continue
+            val model = potholeModel?.info ?: continue
             val msg = Messages.telemetry(
                 Messages.Identity(prefs.deviceId, prefs.busId, prefs.routeId), now, fix,
                 uptimeS = (now - startedMs) / 1000,
-                queueDepth = storage.counts.value["pothole"] ?: 0,
+                queueDepth = storage.counts.value.values.sum(),
                 queueOldestS = 0,
                 inferenceFps = inferFps.fps(now),
                 camerasOnline = server.cameraIds().toList(),
                 cameraQuality = emptyMap(),
-                model = modelInfo(det),
+                model = model,
             )
             runCatching { storage.writeRecord("telemetry", "${Time.compact(now)}.json", msg.toString().toByteArray()) }
         }
@@ -377,11 +453,11 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
         }
     }
 
-    private fun showInferred(cam: String, frame: Bitmap, dets: List<Detection>) {
+    private fun showInferred(cam: String, frame: Bitmap, dets: List<Labeled>, holdMs: Long) {
         val s = 640f / maxOf(frame.width, frame.height)
         val small = Bitmap.createScaledBitmap(frame, (frame.width * s).toInt(), (frame.height * s).toInt(), true)
-        val scaled = dets.map { it.copy(x1 = it.x1 * s, y1 = it.y1 * s, x2 = it.x2 * s, y2 = it.y2 * s) }
-        holdUntil[cam] = System.currentTimeMillis() + 1500
+        val scaled = dets.map { l -> l.copy(det = l.det.copy(x1 = l.det.x1 * s, y1 = l.det.y1 * s, x2 = l.det.x2 * s, y2 = l.det.y2 * s)) }
+        holdUntil[cam] = System.currentTimeMillis() + holdMs
         _previews.update { it + (cam to TilePreview(small, scaled, System.currentTimeMillis(), inferred = true)) }
     }
 
@@ -399,7 +475,10 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
         s.sessionId?.let { put("session_id", it) }
         putJsonObject("records") { storage.counts.value.forEach { (c, n) -> put(c, n) } }
         put("dataset_capture", dataset.active)
-        put("potholes_this_session", s.potholes)
+        putJsonObject("this_session") {
+            put("potholes", s.potholes); put("cracks", s.cracks)
+            put("vehicles_counted", s.vehicles); put("pedestrians_counted", s.pedestrians)
+        }
         putJsonArray("cameras") {
             server.links.value.values.forEach { l -> addJsonObject {
                 put("camera_id", l.cameraId); put("name", l.name); put("fps", l.fps)
@@ -423,11 +502,15 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
         put("confidence_threshold", prefs.confidenceThreshold)
         put("dataset_capture", prefs.captureEnabled)
         put("dataset_spacing_m", prefs.captureSpacingM)
-        detector?.let { d -> putJsonObject("model") { put("name", d.modelName); put("version", d.modelVersion); put("runtime", d.runtime) } }
+        putJsonObject("detectors") {
+            put("potholes", prefs.detectPotholes); put("cracks", prefs.detectCracks); put("traffic", prefs.detectTraffic)
+        }
+        putJsonArray("models") {
+            listOf(Models.POTHOLE, Models.ROAD_DAMAGE, Models.TRAFFIC).forEach { m -> addJsonObject {
+                put("name", m.name); put("version", m.version); put("asset", m.asset)
+            } }
+        }
     }
-
-    private fun modelInfo(d: PotholeDetector) =
-        Messages.ModelInfo(d.modelName, d.modelVersion, d.runtime, "${d.inputSize}x${d.inputSize}")
 
     // ── bitmap helpers ──────────────────────────────────────────────────────
 
@@ -450,21 +533,22 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
         else Bitmap.createScaledBitmap(b, (b.width * s).toInt().coerceAtLeast(1), (b.height * s).toInt().coerceAtLeast(1), true)
     }
 
-    private fun annotate(src: Bitmap, dets: List<Detection>): Bitmap {
+    private fun annotate(src: Bitmap, dets: List<Labeled>): Bitmap {
         val out = src.copy(Bitmap.Config.ARGB_8888, true)
         val c = Canvas(out)
         val stroke = maxOf(3f, out.width / 320f)
-        val box = Paint().apply { style = Paint.Style.STROKE; strokeWidth = stroke; color = Color.rgb(251, 191, 36); isAntiAlias = true }
-        val label = Paint().apply { color = Color.rgb(251, 191, 36); textSize = stroke * 6; isAntiAlias = true; isFakeBoldText = true }
-        for (d in dets) {
-            c.drawRect(d.x1, d.y1, d.x2, d.y2, box)
-            c.drawText("pothole ${(d.score * 100).toInt()}%", d.x1, (d.y1 - stroke * 2).coerceAtLeast(label.textSize), label)
+        for (l in dets) {
+            val color = if (l.kind == Kind.POTHOLE) Color.rgb(251, 191, 36) else Color.rgb(244, 114, 182)
+            val box = Paint().apply { style = Paint.Style.STROKE; strokeWidth = stroke; this.color = color; isAntiAlias = true }
+            val label = Paint().apply { this.color = color; textSize = stroke * 6; isAntiAlias = true; isFakeBoldText = true }
+            c.drawRect(l.det.x1, l.det.y1, l.det.x2, l.det.y2, box)
+            c.drawText("${l.kind.label} ${(l.det.score * 100).toInt()}%", l.det.x1, (l.det.y1 - stroke * 2).coerceAtLeast(label.textSize), label)
         }
         return out
     }
 
     /**
-     * Drops boxes over flat regions — black letterbox bars, blown-out sky, a lens cap. A pothole
+     * Drops boxes over flat regions — black letterbox bars, blown-out sky, a lens cap. Road damage
      * has texture; a detector firing on a uniform patch is firing on nothing.
      */
     private fun plausible(b: Bitmap, d: Detection): Boolean {
@@ -490,5 +574,9 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
         return px.map { p -> 0.299f * ((p shr 16) and 0xFF) + 0.587f * ((p shr 8) and 0xFF) + 0.114f * (p and 0xFF) }.average().toFloat()
     }
 
-    private companion object { const val TAG = "ArgusEngine" }
+    private companion object {
+        const val TAG = "ArgusEngine"
+        const val TRAFFIC_FPS = 4L
+        const val TRAFFIC_WINDOW_MS = 30_000L
+    }
 }

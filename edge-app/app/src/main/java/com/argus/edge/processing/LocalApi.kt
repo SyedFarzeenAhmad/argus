@@ -82,6 +82,7 @@ class LocalApi(
                     f.name.endsWith("-frame.jpg") -> "frame"
                     f.name.endsWith(".jpg") -> "evidence"
                     category == "telemetry" -> "telemetry"
+                    category == "traffic_counting" -> "traffic_window"
                     else -> "observation"
                 })
                 put("bytes", f.length())

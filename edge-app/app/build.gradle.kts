@@ -12,8 +12,8 @@ android {
         applicationId = "com.argus.edge"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
 
         ndk {
             // Real phones only. Keeps the APK from carrying x86 copies of ONNX Runtime + ML Kit.
@@ -51,15 +51,14 @@ android {
     }
 }
 
-// The pothole model is not in git (weights never are — see the root .gitignore).
-// scripts/fetch_model.sh downloads and exports it.
+// The models are not in git (weights never are — see the root .gitignore).
+// scripts/fetch_models.sh downloads and exports them.
 val checkModel by tasks.registering {
-    val model = file("src/main/assets/models/pothole.onnx")
+    val models = listOf("pothole.onnx", "road_damage.onnx", "traffic.onnx").map { file("src/main/assets/models/$it") }
     doLast {
-        if (!model.exists()) {
-            throw GradleException(
-                "Missing ${model.path}. Run edge-app/scripts/fetch_model.sh first."
-            )
+        val missing = models.filterNot { it.exists() }
+        if (missing.isNotEmpty()) {
+            throw GradleException("Missing ${missing.joinToString { it.name }}. Run edge-app/scripts/fetch_models.sh first.")
         }
     }
 }

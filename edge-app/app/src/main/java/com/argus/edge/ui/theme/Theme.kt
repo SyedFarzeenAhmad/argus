@@ -26,6 +26,7 @@ object Argus {
     val Warn = Color(0xFFFBBF24)
     val Bad = Color(0xFFEF4444)
     val Pothole = Color(0xFFFBBF24)
+    val Crack = Color(0xFFF472B6)
 }
 
 private val scheme = darkColorScheme(

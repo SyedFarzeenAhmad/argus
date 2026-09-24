@@ -34,7 +34,8 @@ data class DatasetStats(
  *     session.json
  *     manifest.jsonl            one line per frame: time, camera, GNSS, speed, heading, conditions
  *     frames/<camera>/<utc>_<seq>.jpg      exactly as streamed (1080p), nothing drawn on it
- *     prelabels/<camera>/<utc>_<seq>.txt   the prototype's boxes, YOLO format, for CVAT import
+ *     prelabels/<camera>/<utc>_<seq>.txt   the prototype's road-defect boxes, YOLO format, for CVAT
+ *     classes.txt                          pothole, longitudinal/transverse/alligator crack
  *
  * One folder per drive, tagged with the route, so the dataset splits BY ROUTE, never by frame.
  */
@@ -49,6 +50,8 @@ class DatasetRecorder(private val storage: Storage) {
         val tag = routeId.filter { it.isLetterOrDigit() || it == '-' }.take(16)
         val d = File(storage.datasetRoot, if (tag.isEmpty()) sessionId else "${sessionId}_$tag").apply { mkdirs() }
         File(d, "session.json").writeText(meta.toString())
+        // CVAT's YOLO import reads class names from here; line n = class id n.
+        File(d, "classes.txt").writeText(Models.DATASET_CLASSES.joinToString("\n") { it.name.lowercase() } + "\n")
         dir = d
         _stats.value = DatasetStats(active = true, sessionDir = d.absolutePath, freeBytes = storage.freeBytes())
     }
@@ -61,7 +64,7 @@ class DatasetRecorder(private val storage: Storage) {
     /** Returns false (and stops) when the phone is nearly full, rather than filling it. */
     fun record(
         f: ReceivedFrame, fix: Fix?, odometerM: Double, illumination: String,
-        suggestions: List<Detection>, model: Messages.ModelInfo,
+        suggestions: List<Labeled>, models: List<Messages.ModelInfo>,
     ): Boolean {
         val d = dir ?: return false
         val free = storage.freeBytes()
@@ -75,9 +78,11 @@ class DatasetRecorder(private val storage: Storage) {
         storage.write(File(d, rel), f.jpeg)
 
         if (f.width > 0 && f.height > 0) {
-            val yolo = suggestions.joinToString("\n") { s ->
+            val yolo = suggestions.joinToString("\n") { l ->
+                val s = l.det
+                val cls = Models.DATASET_CLASSES.indexOf(l.kind)
                 val cx = (s.x1 + s.x2) / 2 / f.width; val cy = (s.y1 + s.y2) / 2 / f.height
-                "0 %.6f %.6f %.6f %.6f".format(cx, cy, s.width / f.width, s.height / f.height)
+                "$cls %.6f %.6f %.6f %.6f".format(cx, cy, s.width / f.width, s.height / f.height)
             }
             storage.write(File(d, "prelabels/${f.cameraId}/$stem.txt"), yolo.toByteArray())
         }
@@ -97,12 +102,12 @@ class DatasetRecorder(private val storage: Storage) {
             }
             put("illumination", illumination)
             putJsonArray("prelabels") {
-                suggestions.forEach { s -> addJsonObject {
-                    put("class", "pothole"); put("confidence", s.score)
-                    putJsonArray("bbox_px") { add(s.x1); add(s.y1); add(s.x2); add(s.y2) }
+                suggestions.forEach { l -> addJsonObject {
+                    put("class", l.kind.name.lowercase()); put("confidence", l.det.score)
+                    putJsonArray("bbox_px") { add(l.det.x1); add(l.det.y1); add(l.det.x2); add(l.det.y2) }
                 } }
             }
-            putJsonObject("prelabel_model") { put("name", model.name); put("version", model.version) }
+            putJsonArray("prelabel_models") { models.forEach { m -> addJsonObject { put("name", m.name); put("version", m.version) } } }
         }.toString())
 
         _stats.update {
