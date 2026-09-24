@@ -160,6 +160,17 @@ would have a box about a seventh the area.
 
 ---
 
+### Interim: `traffic_window` (edge app, not a contract message)
+
+Until map matching exists there is no `segment_id`, so vehicle and pedestrian counts cannot yet
+be a `SegmentPass`. The edge app writes them per camera per 30 s as
+`processed/traffic_counting/<utc>-<camera>.json` (`format: argus.edge.traffic_window/0.1`):
+`vehicle_counts` and `pedestrians` use the same keys as `SegmentPass.traffic` / `.pedestrians`,
+plus `gnss_start`, `gnss_end`, `distance_m`, `mean_speed_kmh`, `mean_vehicles_in_frame`,
+`frames_processed`. It is replaced by `SegmentPass` when map matching lands.
+
+---
+
 ## `incident` — a conclusion from a trajectory
 
 ```json

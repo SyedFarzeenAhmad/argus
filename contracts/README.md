@@ -68,6 +68,8 @@ All three are wired into CI. A PR that edits `schemas/` without regenerating fai
 - **Major** — a removed or retyped field, or a new required one. Consumers **must** reject
   a major they don't recognise rather than silently mis-parse it.
 
+**1.1.0 (2026-09-25):** `Observation.subclass` (optional) — the crack type for `damaged_road`.
+
 During the build, stay on `1.x`. If you find yourself wanting a major bump before December,
 that's a signal the model was wrong — raise it with the team rather than versioning around it.
 

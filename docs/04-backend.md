@@ -60,13 +60,15 @@ component that must never be the bottleneck or the source of a subtle data bug.
 
 | Folder | Contents | Backend reads it? |
 |---|---|---|
-| `processed/pothole/` | per pothole: `<utc>-<id>.json` (contract `Observation`), `<utc>-<id>.jpg` (evidence crop), `<utc>-<id>-frame.jpg` (full frame with the box drawn, for review) | **Yes** |
+| `processed/pothole/` | per pothole: `<utc>-<id>.json` (contract `Observation`, `class_id: pothole`), `<utc>-<id>.jpg` (evidence crop); per frame: `<utc>-<camera>-frame.jpg` (full frame, every box drawn, for review) | **Yes** |
+| `processed/damaged_road/` | same layout; `class_id: damaged_road` with `subclass` = `longitudinal_crack` / `transverse_crack` / `alligator_crack` (contract 1.1.0) | **Yes** |
+| `processed/traffic_counting/` | `<utc>-<camera>.json` — unique vehicles by class + pedestrians per camera per 30 s window. **Interim format** `argus.edge.traffic_window/0.1`, not a contract message: its contract home is `SegmentPass`, which needs map matching. Keys match `SegmentPass` so the mapping is one-to-one. | **Yes** — store as-is until SegmentPass exists |
 | `processed/telemetry/` | `<utc>.json` — contract `Telemetry`, every 30 s | **Yes** |
 | `processed/log/` | `<session>.jsonl` — one line per inference, every camera, including frames with nothing found | No (debugging, audits; `adb pull`) |
 | `dataset/<session>_<route>/` | clean training frames + manifest + YOLO pre-labels ([`docs/03`](03-cv-pipeline.md#dataset-capture)) | No — pulled by CV-Perception for training |
 
-Only categories with a model behind them exist today. As models land, more appear alongside
-`pothole/` (e.g. `incidents/`, `traffic_counting/`) with the same file conventions, and the
+Only categories with a model behind them exist today. As models land, more appear (e.g.
+`incidents/`) with the same file conventions, and the
 consumer should read whatever categories `GET /processed` lists rather than a hard-coded set.
 
 File names start with a sortable UTC timestamp, so **name order = capture order**. A file
@@ -82,7 +84,7 @@ needs the token shown on the phone: `Authorization: Bearer <token>`. **GET only.
 |---|---|
 | `/api/v1/status` | device, bus, route, session state, cameras, GNSS, record counts |
 | `/api/v1/processed` | `{categories: {pothole: {records, url}, telemetry: {…}}}` |
-| `/api/v1/processed/{category}?after=<name>&limit=<n>` | `{count, next_after, files: [{name, type, bytes, modified_at, url}]}`, oldest first, only names **after** the cursor. `type` ∈ `observation`, `evidence`, `frame`, `telemetry`. `limit` default 500. |
+| `/api/v1/processed/{category}?after=<name>&limit=<n>` | `{count, next_after, files: [{name, type, bytes, modified_at, url}]}`, oldest first, only names **after** the cursor. `type` ∈ `observation`, `evidence`, `frame`, `traffic_window`, `telemetry`. `limit` default 500. |
 | `/api/v1/processed/{category}/{name}` | the file — `application/json` or `image/jpeg` |
 
 ```bash

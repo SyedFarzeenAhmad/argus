@@ -29,13 +29,13 @@ every phrasing one tier down.
 | # | Claim | Tier | Evidence at the finale |
 |---|---|---|---|
 | D1 | Detects potholes from bus-mounted cameras | **COMMITTED** | Live inference on Bengaluru footage |
-| D2 | Detects damaged road surface as **% distressed area**, not a crack count | **COMMITTED** | Segmentation output + segment condition score |
+| D2 | Detects damaged road surface as **% distressed area**, not a crack count | **COMMITTED** | Segmentation output + segment condition score. Today: crack *boxes* by type (prototype) — say "detects road cracks", not "% area", until segmentation exists |
 | D3 | Detects waterlogging, distinguished from wet road by reflectance + persistence | **COMMITTED** | Wet-weather capture footage |
 | D4 | Detects damaged signboards with a condition classification | **COMMITTED** | Condition head output |
 | D5 | Identifies **missing** zebra crossings and dividers via map-difference over repeated passes | **COMMITTED** | Ledger reasoning visible on the asset record |
 | D6 | Detects debris and open manholes | ROADMAP | Phase 3 |
 | D7 | Surfaces unknown hazards for **human triage** (open-vocabulary) | ROADMAP | Say "for human review", never "detects all hazards" |
-| D8 | Vehicle detection, classification and counting including **auto-rickshaws and two-wheelers** | **COMMITTED** | Track counts per segment pass |
+| D8 | Vehicle detection, classification and counting including **auto-rickshaws and two-wheelers** | **COMMITTED** | Track counts per segment pass. Today: cars, two-wheelers, buses, trucks, bicycles, pedestrians counted (prototype) — **not auto-rickshaws**; do not claim autos until IDD training |
 | D9 | Identifies vulnerable-pedestrian situations using pedestrian clustering + OSM school zones + school hours | **COMMITTED** | Say it this way — it is more impressive than "detects children", and true |
 | D10 | Visually classifies children | **DO NOT SAY** | Not built. Deliberately. |
 | D11 | Detects rash driving and hit-and-run from track kinematics + IMU | **COMMITTED** | Trigger values in the incident record |
@@ -169,6 +169,7 @@ about a demo.
 | Date | Change |
 |---|---|
 | 2026-09-22 | Created. All tiers assigned from the design. Nothing BUILT except the mock frontend and the bandwidth arithmetic. |
+| 2026-09-25 | Edge app v0.3.0: road cracks (`damaged_road` + subclass, contract 1.1.0) and vehicle/pedestrian counting added; prototype models only. D2 and D8 notes updated. |
 | 2026-09-25 | Edge app v0.2.0: one `processed/<category>/` folder (read-only API, backend keeps a cursor, never deletes); dataset capture for training; face blurring removed and deferred — E8 → DO NOT SAY. |
 | 2026-09-25 | Edge app v0.1.0: camera + processing roles, streaming, pothole detection (prototype YOLO11n), processed/ + helpful/ folders, local API. E1a, E1b → BUILT. Pothole *geo* is still the bus position (no IPM yet). |
 | 2026-09-25 | D11: edge moves to Android phones (2 camera phones → 1 edge phone). E1a added. E2 recomputed for two cameras. E3/E4 re-scoped to the phone; dedicated-board comparison moved to E4a, ROADMAP (PPT next step). |

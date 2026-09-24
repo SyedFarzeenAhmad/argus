@@ -45,8 +45,8 @@ This week has one job beyond the video: make it impossible for anyone to be bloc
 | **All** | Video script from [`docs/10`](10-video-claims-matrix.md) | Every claim traced to a row in that table |
 
 **Status 2026-09-25 — CV-Edge week-1 row done, and more:** the edge app v0.1.0 has camera and
-processing roles, N-camera streaming with clock sync, on-device pothole detection (prototype
-model), distance gating, the `processed/` folder and the local API. The
+processing roles, N-camera streaming with clock sync, on-device pothole, road-crack and vehicle/pedestrian detection (prototype
+models), distance gating, the `processed/` folder and the local API. The
 backend's first task follows from it: the read-only `processed/` consumer
 ([`docs/04`](04-backend.md#edge-processed-consumer)). Still owed by CV-Edge for the slice: IPM +
 calibration (so `geo` is the pothole, not the bus) and the MQTT uplink.
