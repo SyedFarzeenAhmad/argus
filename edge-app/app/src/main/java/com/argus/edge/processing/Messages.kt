@@ -60,7 +60,6 @@ object Messages {
                 put("uri", evidenceUri)
                 put("sha256", evidenceSha256)
                 put("bytes", evidenceBytes)
-                put("faces_blurred", true)
             }
         }
         putModel(model)

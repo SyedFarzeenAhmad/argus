@@ -8,17 +8,19 @@ import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import java.io.FileInputStream
 
 /**
- * The hand-off from the processing client to the backend (docs/04 "Consuming the edge
- * phone's helpful folder"). Served on the local network; every /api call needs the token
- * shown on the phone, as `Authorization: Bearer <token>`.
+ * Read-only hand-off from the processing client to the backend (docs/04 "Consuming the
+ * processing client"). Served on the local network; every /api call needs the token shown on
+ * the phone, as `Authorization: Bearer <token>`. Nothing here deletes: the phone keeps its record,
+ * and the backend remembers how far it has read with the `after` cursor.
  *
- *   GET    /api/v1/status              device, session, cameras, pending count
- *   GET    /api/v1/helpful             list, oldest first
- *   GET    /api/v1/helpful/{name}      one file (JSON or JPEG)
- *   DELETE /api/v1/helpful/{name}      consumed → delete (an observation also deletes its JPEG)
+ *   GET /api/v1/status                                  device, session, cameras, counts
+ *   GET /api/v1/processed                               categories and how many records each holds
+ *   GET /api/v1/processed/{category}?after=&limit=      files, oldest first, after a cursor
+ *   GET /api/v1/processed/{category}/{name}             one file (JSON or JPEG)
  */
 class LocalApi(
     port: Int,
@@ -35,23 +37,22 @@ class LocalApi(
         if (uri == "" || uri == "/") return text(Response.Status.OK, "ARGUS edge local API. See /api/v1/status (token required).")
         if (!uri.startsWith("/api/v1")) return error(Response.Status.NOT_FOUND, "not found")
         if (!authorised(session)) return error(Response.Status.UNAUTHORIZED, "missing or wrong token")
+        if (session.method != Method.GET) return error(Response.Status.METHOD_NOT_ALLOWED, "read-only API: GET only")
 
+        val parts = uri.removePrefix("/api/v1").trim('/').split('/')
         return when {
-            uri == "/api/v1/status" && session.method == Method.GET -> json(Response.Status.OK, status())
-            uri == "/api/v1/helpful" && session.method == Method.GET -> json(Response.Status.OK, listing())
-            uri.startsWith("/api/v1/helpful/") -> {
-                val name = uri.removePrefix("/api/v1/helpful/")
-                when (session.method) {
-                    Method.GET -> {
-                        val f = storage.helpfulFile(name) ?: return error(Response.Status.NOT_FOUND, "no such file")
-                        val mime = if (name.endsWith(".jpg")) "image/jpeg" else "application/json"
-                        newFixedLengthResponse(Response.Status.OK, mime, FileInputStream(f), f.length())
-                    }
-                    Method.DELETE ->
-                        if (storage.deleteHelpful(name)) newFixedLengthResponse(Response.Status.NO_CONTENT, MIME_PLAINTEXT, "")
-                        else error(Response.Status.NOT_FOUND, "no such file")
-                    else -> error(Response.Status.METHOD_NOT_ALLOWED, "GET or DELETE")
-                }
+            parts == listOf("status") -> json(Response.Status.OK, status())
+            parts == listOf("processed") -> json(Response.Status.OK, categories())
+            parts.size == 2 && parts[0] == "processed" -> {
+                if (parts[1] !in Storage.CATEGORIES) return error(Response.Status.NOT_FOUND, "no such category")
+                val after = session.parameters["after"]?.firstOrNull()?.takeIf { it.isNotBlank() }
+                val limit = session.parameters["limit"]?.firstOrNull()?.toIntOrNull()?.coerceIn(1, 5000) ?: 500
+                json(Response.Status.OK, listing(parts[1], after, limit))
+            }
+            parts.size == 3 && parts[0] == "processed" -> {
+                val f = storage.file(parts[1], parts[2]) ?: return error(Response.Status.NOT_FOUND, "no such file")
+                val mime = if (f.name.endsWith(".jpg")) "image/jpeg" else "application/json"
+                newFixedLengthResponse(Response.Status.OK, mime, FileInputStream(f), f.length())
             }
             else -> error(Response.Status.NOT_FOUND, "not found")
         }.also { it.addHeader("Cache-Control", "no-store") }
@@ -63,21 +64,29 @@ class LocalApi(
         return (header ?: query) == token()
     }
 
-    private fun listing(): JsonObject = buildJsonObject {
-        val files = storage.listHelpful()
+    private fun categories(): JsonObject = buildJsonObject {
+        putJsonObject("categories") {
+            storage.counts.value.forEach { (c, n) -> putJsonObject(c) { put("records", n); put("url", "/api/v1/processed/$c") } }
+        }
+    }
+
+    private fun listing(category: String, after: String?, limit: Int): JsonObject = buildJsonObject {
+        val files = storage.list(category, after, limit)
+        put("category", category)
         put("count", files.size)
+        files.lastOrNull()?.let { put("next_after", it.name) }
         putJsonArray("files") {
             for (f in files) addJsonObject {
                 put("name", f.name)
                 put("type", when {
-                    f.name.contains("-obs-") && f.name.endsWith(".json") -> "observation"
-                    f.name.contains("-obs-") -> "evidence"
-                    f.name.contains("-tlm") -> "telemetry"
-                    else -> "other"
+                    f.name.endsWith("-frame.jpg") -> "frame"
+                    f.name.endsWith(".jpg") -> "evidence"
+                    category == "telemetry" -> "telemetry"
+                    else -> "observation"
                 })
                 put("bytes", f.length())
                 put("modified_at", Time.rfc3339(f.lastModified()))
-                put("url", "/api/v1/helpful/${f.name}")
+                put("url", "/api/v1/processed/$category/${f.name}")
             }
         }
     }

@@ -8,37 +8,44 @@ import java.io.File
 import java.io.FileOutputStream
 
 /**
- * The two folders on the processing client (docs/03, docs/04):
+ * What the processing client keeps (docs/03, docs/04). Root is app-specific external storage —
+ * /sdcard/Android/data/com.argus.edge/files/argus — so no storage permission, and `adb pull` works.
  *
- *   argus/processed/<session>/   the full local record — every inference, every camera,
- *                                annotated frames and crops. Stays on the phone.
- *   argus/helpful/               ONLY what the servers need, in contract format. The backend
- *                                consumer reads it over the local API and DELETEs what it took.
+ *   processed/                 findings, one subfolder per category
+ *     pothole/                   <utc>-<id>.json   contract Observation
+ *                                <utc>-<id>.jpg    its evidence crop
+ *                                <utc>-<id>-frame.jpg  the full frame, boxes drawn, for review
+ *     telemetry/                 <utc>.json        contract Telemetry, every 30 s
+ *     log/                       <session>.jsonl   one line per inference, every camera
+ *   dataset/<session>/         clean frames for training (DatasetRecorder)
  *
- * Root is app-specific external storage (/sdcard/Android/data/com.argus.edge/files/argus), so
- * it needs no storage permission and `adb pull` works during development.
+ * The backend reads processed/<category>/ over the local API and does NOT delete: the phone
+ * keeps its record. Categories are added as their models land (incidents, traffic_counting, …).
  */
 class Storage(context: Context) {
     val root: File = File(context.getExternalFilesDir(null) ?: context.filesDir, "argus")
-    val processedRoot = File(root, "processed")
-    val helpful = File(root, "helpful")
+    val processed = File(root, "processed")
+    val datasetRoot = File(root, "dataset")
     private val tmp = File(root, ".tmp")
 
-    private val _helpfulPending = MutableStateFlow(0)
-    val helpfulPending: StateFlow<Int> = _helpfulPending.asStateFlow()
+    private val _counts = MutableStateFlow<Map<String, Int>>(emptyMap())
+    /** JSON records per category. */
+    val counts: StateFlow<Map<String, Int>> = _counts.asStateFlow()
 
     init {
-        processedRoot.mkdirs(); helpful.mkdirs(); tmp.mkdirs()
+        CATEGORIES.forEach { category(it) }
+        File(processed, "log").mkdirs()
+        datasetRoot.mkdirs(); tmp.mkdirs()
         tmp.listFiles()?.forEach { it.delete() }
-        refreshCount()
+        refreshCounts()
     }
 
-    fun sessionDir(sessionId: String): File = File(processedRoot, sessionId).apply {
-        File(this, "frames").mkdirs()
-        File(this, "crops").mkdirs()
-    }
+    fun category(name: String): File = File(processed, name).apply { mkdirs() }
+
+    fun logFile(sessionId: String) = File(processed, "log/$sessionId.jsonl")
 
     fun appendLine(file: File, line: String) {
+        file.parentFile?.mkdirs()
         FileOutputStream(file, true).use { it.write((line + "\n").toByteArray(Charsets.UTF_8)) }
     }
 
@@ -48,47 +55,41 @@ class Storage(context: Context) {
     }
 
     /**
-     * Written to .tmp then renamed, so the API can never list a half-written file. For an
-     * observation, write the evidence JPEG FIRST: a consumer that sees the JSON can rely on
-     * its evidence already being there.
+     * Written to .tmp then renamed, so the API never lists a half-written file. For a pothole,
+     * write the JPEGs FIRST: a reader that sees the JSON can rely on its evidence being there.
      */
-    fun writeHelpful(name: String, bytes: ByteArray) {
+    fun writeRecord(category: String, name: String, bytes: ByteArray) {
         val t = File(tmp, "$name.part")
         t.writeBytes(bytes)
-        if (!t.renameTo(File(helpful, name))) { t.delete(); error("rename failed for $name") }
-        refreshCount()
+        if (!t.renameTo(File(category(category), name))) { t.delete(); error("rename failed for $name") }
+        if (name.endsWith(".json")) refreshCounts()
     }
 
-    /** Files the backend may consume, oldest first (names start with a sortable UTC timestamp). */
-    fun listHelpful(): List<File> =
-        helpful.listFiles { f -> f.isFile && NAME.matches(f.name) }?.sortedBy { it.name } ?: emptyList()
-
-    fun helpfulFile(name: String): File? {
-        if (!NAME.matches(name)) return null
-        val f = File(helpful, name)
-        return if (f.isFile && f.parentFile?.canonicalPath == helpful.canonicalPath) f else null
+    /** Files of a category in name order (= capture order), optionally only those after a cursor. */
+    fun list(category: String, after: String? = null, limit: Int = Int.MAX_VALUE): List<File> {
+        if (category !in CATEGORIES) return emptyList()
+        return (File(processed, category).listFiles { f -> f.isFile && NAME.matches(f.name) } ?: emptyArray())
+            .sortedBy { it.name }
+            .let { all -> if (after == null) all else all.filter { it.name > after } }
+            .take(limit)
     }
 
-    /** Deleting an observation JSON also deletes its evidence JPEG: consuming one consumes both. */
-    fun deleteHelpful(name: String): Boolean {
-        val f = helpfulFile(name) ?: return false
-        val ok = f.delete()
-        if (ok && name.endsWith(".json") && name.contains("-obs-")) {
-            helpfulFile(name.removeSuffix(".json") + ".jpg")?.delete()
-        }
-        refreshCount()
-        return ok
+    fun file(category: String, name: String): File? {
+        if (category !in CATEGORIES || !NAME.matches(name)) return null
+        val dir = File(processed, category)
+        val f = File(dir, name)
+        return if (f.isFile && f.parentFile?.canonicalPath == dir.canonicalPath) f else null
     }
 
-    /** Pending = records awaiting the backend (JSON files; JPEGs ride with their observation). */
-    fun refreshCount() {
-        _helpfulPending.value = helpful.listFiles { f -> f.name.endsWith(".json") }?.size ?: 0
+    fun refreshCounts() {
+        _counts.value = CATEGORIES.associateWith { c -> File(processed, c).listFiles { f -> f.name.endsWith(".json") }?.size ?: 0 }
     }
 
-    fun oldestHelpfulAgeS(now: Long): Long =
-        listHelpful().firstOrNull { it.name.endsWith(".json") }?.let { ((now - it.lastModified()) / 1000).coerceAtLeast(0) } ?: 0
+    fun freeBytes(): Long = root.usableSpace
 
     companion object {
+        /** Only categories with a model behind them today. */
+        val CATEGORIES = listOf("pothole", "telemetry")
         val NAME = Regex("^[A-Za-z0-9._-]{1,128}$")
     }
 }

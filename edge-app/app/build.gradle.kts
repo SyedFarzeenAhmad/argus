@@ -12,8 +12,8 @@ android {
         applicationId = "com.argus.edge"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
 
         ndk {
             // Real phones only. Keeps the APK from carrying x86 copies of ONNX Runtime + ML Kit.
@@ -87,11 +87,9 @@ dependencies {
     implementation("androidx.camera:camera-view:$camerax")
 
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
-    implementation("com.google.mlkit:face-detection:16.1.7")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
     testImplementation("junit:junit:4.13.2")

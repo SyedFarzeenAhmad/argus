@@ -50,6 +50,7 @@ import androidx.compose.material.icons.rounded.GpsFixed
 import androidx.compose.material.icons.rounded.GpsOff
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Movie
+import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
@@ -63,6 +64,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -95,6 +98,7 @@ import com.argus.edge.core.GateMode
 import com.argus.edge.core.Net
 import com.argus.edge.core.Prefs
 import com.argus.edge.link.CameraLink
+import com.argus.edge.processing.DatasetStats
 import com.argus.edge.processing.EdgeEngine
 import com.argus.edge.processing.EngineState
 import com.argus.edge.processing.Finding
@@ -133,7 +137,9 @@ fun ProcessingScreen(engine: EdgeEngine, prefs: Prefs, onSettings: () -> Unit) {
     val previews by engine.previews.collectAsState()
     val findings by engine.findings.collectAsState()
     val fix by engine.location.latest.collectAsState()
-    val pending by engine.storage.helpfulPending.collectAsState()
+    val counts by engine.storage.counts.collectAsState()
+    val ds by engine.dataset.stats.collectAsState()
+    var capture by remember { mutableStateOf(prefs.captureEnabled) }
     var gate by remember { mutableStateOf(prefs.gateMode) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
@@ -151,7 +157,7 @@ fun ProcessingScreen(engine: EdgeEngine, prefs: Prefs, onSettings: () -> Unit) {
             if (!state.locationOn) item {
                 Banner("GPS is off or not permitted. Potholes will be kept in processed/ only until there is a fix.", Argus.Warn)
             }
-            item { StatsGrid(state, links.size, pending) }
+            item { StatsGrid(state, links.size, counts["pothole"] ?: 0) }
 
             item {
                 SectionHeader("Cameras · ${links.size}") {
@@ -166,6 +172,13 @@ fun ProcessingScreen(engine: EdgeEngine, prefs: Prefs, onSettings: () -> Unit) {
                 CameraTile(l, previews[l.cameraId], now)
             }
 
+            item { SectionHeader("Dataset capture") }
+            item {
+                DatasetPanel(capture, prefs.captureSpacingM, ds, state.running) {
+                    capture = it; engine.setCapture(it)
+                }
+            }
+
             item { SectionHeader("Location & sampling") }
             item {
                 LocationPanel(fix, now, engine.location.odometerM, gate) {
@@ -177,7 +190,7 @@ fun ProcessingScreen(engine: EdgeEngine, prefs: Prefs, onSettings: () -> Unit) {
             item { FindingsRow(findings) }
 
             item { SectionHeader("Server hand-off") }
-            item { HandoffPanel(context, prefs, state, pending, engine.storage.root.absolutePath) }
+            item { HandoffPanel(context, prefs, state, counts, engine.storage.root.absolutePath) }
         }
     }
 }
@@ -240,14 +253,14 @@ private fun SessionHero(state: EngineState, cameras: Int, now: Long, onToggle: (
 }
 
 @Composable
-private fun StatsGrid(state: EngineState, cameras: Int, pending: Int) {
+private fun StatsGrid(state: EngineState, cameras: Int, records: Int) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             StatTile("Cameras", "$cameras", Icons.Rounded.CameraAlt, Argus.Accent, Modifier.weight(1f), sub = "linked now")
             StatTile("Potholes", "${state.potholes}", Icons.Rounded.Warning, Argus.Pothole, Modifier.weight(1f), sub = "this session")
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            StatTile("Helpful", "$pending", Icons.Rounded.CloudUpload, Argus.Good, Modifier.weight(1f), sub = "awaiting server")
+            StatTile("Records", "$records", Icons.Rounded.CloudUpload, Argus.Good, Modifier.weight(1f), sub = "in processed/pothole")
             StatTile(
                 "Inference", "%.1f/s".format(state.inferenceFps), Icons.Rounded.Memory, Argus.Accent, Modifier.weight(1f),
                 sub = if (state.lastInferenceMs > 0) "${state.lastInferenceMs} ms · ${state.inferences} runs" else "not running",
@@ -406,9 +419,9 @@ private fun FindingsRow(findings: List<Finding>) {
                         }
                         Text(fmt.format(Date(f.atMs)), style = MaterialTheme.typography.bodySmall.copy(fontFamily = Mono), color = Argus.TextFaint)
                         Text(
-                            if (f.helpful) "→ helpful" else "processed only",
+                            if (f.saved) "saved" else "no GPS · logged only",
                             style = MaterialTheme.typography.labelMedium,
-                            color = if (f.helpful) Argus.Good else Argus.Warn,
+                            color = if (f.saved) Argus.Good else Argus.Warn,
                         )
                     }
                 }
@@ -418,27 +431,71 @@ private fun FindingsRow(findings: List<Finding>) {
 }
 
 @Composable
-private fun HandoffPanel(context: Context, prefs: Prefs, state: EngineState, pending: Int, root: String) {
+private fun HandoffPanel(context: Context, prefs: Prefs, state: EngineState, counts: Map<String, Int>, root: String) {
     val ip = remember { Net.localIpv4().firstOrNull() ?: "<this-phone-ip>" }
     val base = "http://$ip:${Net.API_PORT}/api/v1"
     Panel {
         Row(verticalAlignment = Alignment.CenterVertically) {
             StatusPill(if (state.apiOn) "API serving" else "API off", if (state.apiOn) Argus.Good else Argus.Bad, pulsing = state.apiOn)
             Spacer(Modifier.weight(1f))
-            Text("$pending pending", style = MaterialTheme.typography.labelLarge, color = Argus.Text)
+            Text("read-only", style = MaterialTheme.typography.labelLarge, color = Argus.TextDim)
         }
         Spacer(Modifier.height(12.dp))
         Text(
-            "The ARGUS backend consumes helpful/ over this API and deletes each file once stored.",
+            "The ARGUS backend reads processed/ over this API. Nothing is deleted from this phone.",
             style = MaterialTheme.typography.bodySmall, color = Argus.TextDim,
         )
         Spacer(Modifier.height(8.dp))
-        CopyRow(context, "endpoint", "$base/helpful")
+        CopyRow(context, "endpoint", "$base/processed")
         CopyRow(context, "token", prefs.apiToken)
         Spacer(Modifier.height(8.dp))
-        KeyValue("helpful/", "only what the server needs", mono = false)
-        KeyValue("processed/", "full record, stays here", mono = false)
+        counts.forEach { (c, n) -> KeyValue("processed/$c/", "$n records") }
         Text(root, style = MaterialTheme.typography.bodySmall.copy(fontFamily = Mono), color = Argus.TextFaint)
+    }
+}
+
+@Composable
+private fun DatasetPanel(on: Boolean, spacingM: Int, ds: DatasetStats, running: Boolean, onToggle: (Boolean) -> Unit) {
+    Panel(highlight = if (ds.active) Argus.Accent else null) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(Argus.Accent.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Rounded.PhotoLibrary, null, tint = Argus.Accent)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Record training frames", style = MaterialTheme.typography.titleSmall, color = Argus.Text)
+                Text("Clean 1080p frame from every camera every $spacingM m, pothole or not.",
+                    style = MaterialTheme.typography.bodySmall, color = Argus.TextDim)
+            }
+            Switch(
+                checked = on, onCheckedChange = onToggle,
+                colors = SwitchDefaults.colors(checkedThumbColor = Argus.Void, checkedTrackColor = Argus.Accent,
+                    uncheckedTrackColor = Argus.SurfaceTop, uncheckedBorderColor = Argus.Outline),
+            )
+        }
+        if (on) {
+            Spacer(Modifier.height(14.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Metric("frames", "${ds.frames}")
+                Metric("size", "%.0f MB".format(ds.bytes / 1e6))
+                Metric("free", "%.1f GB".format(ds.freeBytes / 1e9), color = if (ds.freeBytes < 2e9) Argus.Warn else Argus.Text)
+            }
+            if (ds.perCamera.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(ds.perCamera.entries.sortedBy { it.key }.joinToString("  ·  ") { "${it.key} ${it.value}" },
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = Mono), color = Argus.TextDim)
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                when {
+                    ds.stoppedReason != null -> ds.stoppedReason
+                    !running -> "Starts with the next session. Cameras switch to 1080p now."
+                    else -> "Saving to ${ds.sessionDir?.substringAfterLast("/argus/") ?: "dataset/"} — frames, manifest, YOLO pre-labels."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (ds.stoppedReason != null) Argus.Warn else Argus.TextFaint,
+            )
+        }
     }
 }
 

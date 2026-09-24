@@ -59,6 +59,10 @@ class FrameClient(private val appVersion: String) {
 
     val isStreaming: Boolean get() = _state.value is LinkState.Streaming
 
+    /** Set by the processing client over the link; the camera streamer reads it every frame. */
+    private val _config = MutableStateFlow(StreamConfig.DETECT)
+    val config: StateFlow<StreamConfig> = _config.asStateFlow()
+
     fun link(host: String, port: Int, cameraId: String, deviceName: String) {
         unlink()
         job = scope.launch {
@@ -117,6 +121,8 @@ class FrameClient(private val appVersion: String) {
                         if (m.type == Protocol.ACK) {
                             inFlight.updateAndGet { (it - 1).coerceAtLeast(0) }
                             lastAck.set(System.currentTimeMillis())
+                        } else if (m.type == Protocol.CONFIG) {
+                            _config.value = StreamConfig.fromJson(Protocol.parseJson(m.payload))
                         } else if (m.type == Protocol.PONG) {
                             val t2 = System.currentTimeMillis()
                             val p = Protocol.parseJson(m.payload)

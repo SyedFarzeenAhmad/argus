@@ -156,6 +156,7 @@ fun CameraScreen(onSettings: () -> Unit, vm: CameraViewModel = viewModel()) {
     }
 
     val state by vm.client.state.collectAsState()
+    val streamCfg by vm.client.config.collectAsState()
     val peers by vm.discovery.peers.collectAsState()
 
     Box(Modifier.fillMaxSize().background(Argus.Void)) {
@@ -214,7 +215,7 @@ fun CameraScreen(onSettings: () -> Unit, vm: CameraViewModel = viewModel()) {
                     transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(200)) },
                     label = "panel",
                 ) { streaming ->
-                    if (streaming) StreamingPanel(state as? LinkState.Streaming, vm::unlink)
+                    if (streaming) StreamingPanel(state as? LinkState.Streaming, streamCfg.mode == "capture", vm::unlink)
                     else LinkPanel(state, peers, vm.prefs.lastProcessorHost, vm::link, vm::unlink)
                 }
             }
@@ -230,7 +231,8 @@ private fun CameraPreview(vm: CameraViewModel) {
     val previewView = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; keepScreenOn = true } }
     val useCases = remember {
         val selector = ResolutionSelector.Builder()
-            .setResolutionStrategy(ResolutionStrategy(Size(1280, 720), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
+            // 1080p sensor frames; detection mode downscales to 1280, dataset capture sends them whole.
+            .setResolutionStrategy(ResolutionStrategy(Size(1920, 1080), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
             .build()
         val preview = Preview.Builder().build()
         val analysis = ImageAnalysis.Builder()
@@ -386,7 +388,7 @@ private fun Busy(text: String, onCancel: () -> Unit) {
 }
 
 @Composable
-private fun StreamingPanel(s: LinkState.Streaming?, onUnlink: () -> Unit) {
+private fun StreamingPanel(s: LinkState.Streaming?, capture: Boolean, onUnlink: () -> Unit) {
     s ?: return
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -399,6 +401,7 @@ private fun StreamingPanel(s: LinkState.Streaming?, onUnlink: () -> Unit) {
                 Text(s.processorName, style = MaterialTheme.typography.titleMedium, color = Argus.Text)
                 Text(s.host, style = MaterialTheme.typography.bodySmall.copy(fontFamily = Mono), color = Argus.TextFaint)
             }
+            if (capture) StatusPill("Dataset · 1080p", Argus.Accent)
         }
         Spacer(Modifier.height(18.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

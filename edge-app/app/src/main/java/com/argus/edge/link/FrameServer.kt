@@ -63,6 +63,17 @@ class FrameServer(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var server: ServerSocket? = null
     private val sockets = ConcurrentHashMap<String, Socket>()
+    private val outs = ConcurrentHashMap<String, DataOutputStream>()
+
+    @Volatile var streamConfig: StreamConfig = StreamConfig.DETECT
+        private set
+
+    /** Tells every linked camera (and every future one) what to send. */
+    fun setStreamConfig(cfg: StreamConfig) {
+        if (cfg == streamConfig) return
+        streamConfig = cfg
+        outs.values.forEach { o -> runCatching { Protocol.writeJson(o, Protocol.CONFIG, cfg.toJson()) } }
+    }
     private val latest = ConcurrentHashMap<String, ReceivedFrame>()
     private val counters = ConcurrentHashMap<String, FpsCounter>()
 
@@ -135,6 +146,8 @@ class FrameServer(
                 put("device_id", deviceId())
                 put("name", deviceId())
             })
+            Protocol.writeJson(out, Protocol.CONFIG, streamConfig.toJson())
+            outs[id] = out
 
             while (true) {
                 val m = Protocol.read(input)
@@ -170,6 +183,7 @@ class FrameServer(
             cameraId?.let { id ->
                 // Only drop the link if this socket is still the current one for that camera.
                 if (sockets.remove(id, socket)) {
+                    outs.remove(id)
                     latest.remove(id)
                     _links.value = _links.value - id
                 }

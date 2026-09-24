@@ -26,11 +26,6 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Argus">
 
-        <!-- Face detection model is bundled in the APK, not downloaded at runtime. -->
-        <meta-data
-            android:name="com.google.mlkit.vision.DEPENDENCIES"
-            android:value="face" />
-
         <activity
             android:name=".MainActivity"
             android:exported="true"

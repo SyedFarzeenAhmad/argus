@@ -23,7 +23,7 @@ class MessagesTest {
         val obs = Messages.observation(
             "0b9e7c7e-6a2f-4c7b-9a0e-3f1d2c4b5a69", who, "front", 1_790_000_000_123L, 0.8123f, fix,
             Detection(612f, 700f, 780f, 760f, 0.8123f, 0), "day",
-            "edge://ARGUS-4F2A1C/helpful/x.jpg", "a".repeat(64), 46211, model,
+            "edge://ARGUS-4F2A1C/processed/pothole/x.jpg", "a".repeat(64), 46211, model,
         )
         assertEquals("2026-09-21T14:13:20.123Z", obs["captured_at"]!!.jsonPrimitive.content)
         assertEquals("gnss", obs["geo"]!!.jsonObject["source"]!!.jsonPrimitive.content)

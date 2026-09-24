@@ -3,6 +3,7 @@ package com.argus.edge
 import com.argus.edge.core.GateMode
 import com.argus.edge.link.ClockSync
 import com.argus.edge.link.Protocol
+import com.argus.edge.link.StreamConfig
 import com.argus.edge.processing.FrameGate
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -63,5 +64,12 @@ class LinkTest {
         assertTrue(g.shouldInfer("front", GateMode.TIME, 0.0, 0))
         assertFalse(g.shouldInfer("front", GateMode.TIME, 0.0, 300))
         assertTrue(g.shouldInfer("front", GateMode.TIME, 0.0, 600))
+    }
+
+    @Test fun streamConfigRoundTripsAndClampsGarbage() {
+        assertEquals(StreamConfig.CAPTURE, StreamConfig.fromJson(StreamConfig.CAPTURE.toJson()))
+        val bad = buildJsonObject { put("mode", "capture"); put("max_edge", 99999); put("jpeg_quality", 5); put("fps", 0) }
+        val c = StreamConfig.fromJson(bad)
+        assertEquals(3840, c.maxEdge); assertEquals(40, c.jpegQuality); assertEquals(1, c.fps)
     }
 }

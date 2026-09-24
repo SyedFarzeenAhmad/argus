@@ -87,10 +87,13 @@ class LocationTracker(context: Context) {
             if (dt in 0.2..5.0) {
                 val derived = (d / dt).toFloat()
                 val reported = fix.speedMs
+                // Some chips (and emulators) report 0 speed and 0 bearing while clearly moving;
+                // trust the displacement between fixes then, for both.
+                val unreliable = reported == null || (reported < 0.5f && derived > 2f)
+                val derivedBearing = if (d > 0.5) bearingDeg(prevFix.lat, prevFix.lon, fix.lat, fix.lon) else prevFix.bearingDeg
                 fix = fix.copy(
-                    // Some chips (and emulators) report 0 while clearly moving; trust displacement then.
-                    speedMs = if (reported == null || (reported < 0.5f && derived > 2f)) derived else reported,
-                    bearingDeg = fix.bearingDeg ?: if (d > 0.5) bearingDeg(prevFix.lat, prevFix.lon, fix.lat, fix.lon) else prevFix.bearingDeg,
+                    speedMs = if (unreliable) derived else reported,
+                    bearingDeg = if (unreliable || fix.bearingDeg == null) derivedBearing else fix.bearingDeg,
                 )
             }
         }

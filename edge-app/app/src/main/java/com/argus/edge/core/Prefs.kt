@@ -53,7 +53,16 @@ class Prefs(context: Context) {
             ?: GateMode.DISTANCE
         set(v) = sp.edit().putString("gate", v.name).apply()
 
-    /** Bearer token for the helpful-data API. Shown on screen; the backend consumer is configured with it. */
+    /** Dataset capture: clean frames for training, every [captureSpacingM] metres. */
+    var captureEnabled: Boolean
+        get() = sp.getBoolean("capture", false)
+        set(v) = sp.edit().putBoolean("capture", v).apply()
+
+    var captureSpacingM: Int
+        get() = sp.getInt("capture_spacing", 10)
+        set(v) = sp.edit().putInt("capture_spacing", v.coerceIn(2, 100)).apply()
+
+    /** Bearer token for the local processed-data API. Shown on screen; the backend consumer is configured with it. */
     val apiToken: String
         get() = sp.getString("api_token", null) ?: randomToken(20, ALNUM).also {
             sp.edit().putString("api_token", it).apply()

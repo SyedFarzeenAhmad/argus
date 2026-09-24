@@ -12,7 +12,7 @@ object Time {
     /** Contract Timestamp: RFC3339 UTC, millisecond precision. */
     fun rfc3339(epochMs: Long): String = rfc3339.format(Instant.ofEpochMilli(epochMs))
 
-    /** Sortable, filename-safe. Helpful files are named with it so listing order = capture order. */
+    /** Sortable, filename-safe. Records are named with it so listing order = capture order. */
     fun compact(epochMs: Long): String = compact.format(Instant.ofEpochMilli(epochMs))
 
     fun sessionId(epochMs: Long): String = session.format(Instant.ofEpochMilli(epochMs))

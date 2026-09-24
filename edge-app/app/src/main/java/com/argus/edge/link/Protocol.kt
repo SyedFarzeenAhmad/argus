@@ -19,6 +19,7 @@ import java.io.IOException
  *   PING    camera → proc   JSON {t0}
  *   PONG    proc → camera   JSON {t0, t1}
  *   ACK     proc → camera   JSON {seq}   — one per FRAME received
+ *   CONFIG  proc → camera   JSON {mode, max_edge, jpeg_quality, fps} — sent on link and on change
  *
  * capture_ms is the camera phone's wall clock at capture. offset_ms is the camera's current
  * estimate of (processing clock − camera clock) from PING/PONG, so the processing client
@@ -38,6 +39,7 @@ object Protocol {
     const val PING: Int = 4
     const val PONG: Int = 5
     const val ACK: Int = 6
+    const val CONFIG: Int = 7
 
     /** Frames a camera may have in flight before it waits for an ACK. Bounds stream latency. */
     const val MAX_IN_FLIGHT = 2
@@ -91,6 +93,31 @@ object Protocol {
         val header = json.parseToJsonElement(String(payload, 2, hLen, Charsets.UTF_8)).jsonObject
         val jpeg = payload.copyOfRange(2 + hLen, payload.size)
         return header to jpeg
+    }
+}
+
+/** What the processing client asks each camera to send. */
+data class StreamConfig(val mode: String, val maxEdge: Int, val jpegQuality: Int, val fps: Int) {
+    fun toJson() = kotlinx.serialization.json.buildJsonObject {
+        put("mode", kotlinx.serialization.json.JsonPrimitive(mode))
+        put("max_edge", kotlinx.serialization.json.JsonPrimitive(maxEdge))
+        put("jpeg_quality", kotlinx.serialization.json.JsonPrimitive(jpegQuality))
+        put("fps", kotlinx.serialization.json.JsonPrimitive(fps))
+    }
+
+    companion object {
+        /** Live detection: 720p-class, light on the Wi-Fi. */
+        val DETECT = StreamConfig("detect", 1280, 80, 10)
+        /** Dataset capture: full 1080p, light compression. Only ~2 frames/s are kept at 10 m spacing. */
+        val CAPTURE = StreamConfig("capture", 1920, 92, 4)
+
+        fun fromJson(o: JsonObject): StreamConfig {
+            fun i(k: String, d: Int) = (o[k] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull() ?: d
+            return StreamConfig(
+                (o["mode"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: "detect",
+                i("max_edge", 1280).coerceIn(320, 3840), i("jpeg_quality", 80).coerceIn(40, 100), i("fps", 10).coerceIn(1, 30),
+            )
+        }
     }
 }
 

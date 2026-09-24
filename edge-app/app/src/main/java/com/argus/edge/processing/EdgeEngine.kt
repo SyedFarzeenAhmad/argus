@@ -17,6 +17,7 @@ import com.argus.edge.link.Discovery
 import com.argus.edge.link.FpsCounter
 import com.argus.edge.link.FrameServer
 import com.argus.edge.link.ReceivedFrame
+import com.argus.edge.link.StreamConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -49,14 +50,14 @@ data class EngineState(
     val sessionStartMs: Long = 0,
     val inferences: Long = 0,
     val potholes: Long = 0,
-    val helpfulWritten: Long = 0,
+    val recordsWritten: Long = 0,
     val inferenceFps: Float = 0f,
     val lastInferenceMs: Long = 0,
     val modelReady: Boolean = false,
     val modelError: String? = null,
     val locationOn: Boolean = false,
     val apiOn: Boolean = false,
-    /** Why the last finding did not reach helpful/, if it didn't. Shown on screen. */
+    /** Why the last finding was not saved as a record, if it wasn't. Shown on screen. */
     val notice: String? = null,
 )
 
@@ -69,13 +70,14 @@ class Finding(
     val confidence: Float,
     val atMs: Long,
     val thumb: Bitmap,
-    val helpful: Boolean,
+    /** Saved to processed/pothole/ (false = no GPS fix, logged only). */
+    val saved: Boolean,
 )
 
 /**
  * The processing client. Owns the frame server (cameras link to it), discovery, the GNSS
  * tracker, the local API, and — while a session runs — the inference loop that turns frames
- * into processed/ records and helpful/ contract messages.
+ * into processed/ records and, when dataset capture is on, dataset/ training frames.
  */
 class EdgeEngine(private val context: Context, private val prefs: Prefs) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -89,13 +91,14 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
     private var api: LocalApi? = null
 
     private var detector: PotholeDetector? = null
-    private var faceBlur: FaceBlur? = null
     private val gate = FrameGate()
+    private var captureGate = FrameGate(metres = prefs.captureSpacingM.toDouble(), intervalMs = 1000)
+    val dataset = DatasetRecorder(storage)
     private val inferFps = FpsCounter()
 
     private var sessionJob: Job? = null
     private var previewJob: Job? = null
-    private var sessionDir: File? = null
+    private var sessionId: String? = null
     private val startedMs = System.currentTimeMillis()
 
     private val _state = MutableStateFlow(EngineState())
@@ -115,6 +118,7 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
     /** Processing role shown: cameras can link, the API serves, GNSS runs. No inference yet. */
     fun activate() {
         if (_state.value.active) return
+        server.setStreamConfig(if (prefs.captureEnabled) StreamConfig.CAPTURE else StreamConfig.DETECT)
         server.start()
         discovery.advertise(prefs.deviceId, Net.FRAME_PORT)
         if (api == null) {
@@ -151,25 +155,42 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
         if (sessionJob?.isActive == true) return
         val now = System.currentTimeMillis()
         val id = Time.sessionId(now)
-        val dir = storage.sessionDir(id)
-        sessionDir = dir
+        sessionId = id
         gate.reset()
+        captureGate = FrameGate(metres = prefs.captureSpacingM.toDouble(), intervalMs = 1000)
         _state.update {
             it.copy(running = true, sessionId = id, sessionStartMs = now, inferences = 0, potholes = 0,
-                helpfulWritten = 0, notice = null)
+                recordsWritten = 0, notice = null)
         }
         sessionJob = scope.launch(inferenceDispatcher) {
             if (!loadModels()) { _state.update { it.copy(running = false) }; return@launch }
-            storage.write(File(dir, "session.json"), sessionJson(id, now).toString().toByteArray())
+            storage.appendLine(storage.logFile(id), buildJsonObject { put("session", sessionJson(id, now)) }.toString())
+            if (prefs.captureEnabled) dataset.begin(id, sessionJson(id, now), prefs.routeId)
             launch(Dispatchers.IO) { telemetryLoop() }
-            inferenceLoop(dir)
+            inferenceLoop(id)
         }
     }
 
     fun stopSession() {
         sessionJob?.cancel()
         sessionJob = null
+        dataset.end()
         _state.update { it.copy(running = false) }
+    }
+
+    /**
+     * Dataset capture on/off. Also tells every camera phone to switch between detection
+     * quality (1280, q80) and capture quality (1920, q92). Takes effect mid-session.
+     */
+    fun setCapture(on: Boolean) {
+        prefs.captureEnabled = on
+        server.setStreamConfig(if (on) StreamConfig.CAPTURE else StreamConfig.DETECT)
+        val id = sessionId
+        if (on && _state.value.running && id != null && !dataset.active) {
+            captureGate = FrameGate(metres = prefs.captureSpacingM.toDouble(), intervalMs = 1000)
+            dataset.begin(id, sessionJson(id, System.currentTimeMillis()), prefs.routeId)
+        }
+        if (!on) dataset.end()
     }
 
     fun startTestVideo(uri: Uri) {
@@ -180,10 +201,9 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
     fun stopTestVideo() = videoSource.stop()
 
     private fun loadModels(): Boolean {
-        if (detector != null && faceBlur != null) return true
+        if (detector != null) return true
         return try {
-            detector = detector ?: PotholeDetector(context)
-            faceBlur = faceBlur ?: FaceBlur()
+            detector = PotholeDetector(context)
             _state.update { it.copy(modelReady = true, modelError = null) }
             true
         } catch (e: Throwable) {
@@ -197,23 +217,28 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
 
     private val lastSeq = HashMap<String, Long>()
 
-    private suspend fun inferenceLoop(dir: File) {
+    private suspend fun inferenceLoop(sessionId: String) {
+        val log = storage.logFile(sessionId)
         while (currentCoroutineContext().isActive) {
             var worked = false
             for (cam in server.cameraIds().sorted()) {
                 val f = server.latest(cam) ?: continue
                 if (f.seq == lastSeq[cam]) continue
                 val now = System.currentTimeMillis()
-                if (!gate.shouldInfer(cam, prefs.gateMode, location.odometerM, now)) continue
+                // Capture (every 10 m) and detection (every 5 m) are gated independently; a
+                // captured frame is always also run through the model, for its pre-labels.
+                val capture = dataset.active && captureGate.shouldInfer(cam, prefs.gateMode, location.odometerM, now)
+                val infer = gate.shouldInfer(cam, prefs.gateMode, location.odometerM, now)
+                if (!capture && !infer) continue
                 lastSeq[cam] = f.seq
                 worked = true
-                runCatching { process(f, dir) }.onFailure { Log.e(TAG, "process $cam", it) }
+                runCatching { process(f, log, capture) }.onFailure { Log.e(TAG, "process $cam", it) }
             }
             if (!worked) delay(15)
         }
     }
 
-    private suspend fun process(f: ReceivedFrame, dir: File) {
+    private fun process(f: ReceivedFrame, log: File, capture: Boolean) {
         val bmp = BitmapFactory.decodeByteArray(f.jpeg, 0, f.jpeg.size) ?: return
         val det = detector ?: return
         val t0 = System.nanoTime()
@@ -226,49 +251,48 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
         val who = Messages.Identity(prefs.deviceId, prefs.busId, prefs.routeId)
         val model = modelInfo(det)
         val stamp = Time.compact(f.captureMs)
-        var helpfulNote = if (dets.isEmpty()) "none" else "written"
+        val saved = if (dets.isEmpty()) "none" else if (fix == null) "no_gnss_fix" else "saved"
         val obsIds = dets.map { UUID.randomUUID().toString() }
+        val illum = Messages.illumination(meanLuma(bmp))
+
+        if (capture) dataset.record(f, fix, location.odometerM, illum, dets, model)
 
         if (dets.isNotEmpty()) {
-            // Privacy gate before ANY write. Fail closed: no blur, no image.
-            val blurred = faceBlur?.blur(bmp)
-            if (blurred == null) {
-                helpfulNote = "face_blur_failed"
-            } else {
-                val clean = blurred.bitmap
-                val annotated = annotate(clean, dets)
-                storage.write(File(dir, "frames/${stamp}_${f.cameraId}.jpg"), jpeg(annotated, 85))
+            // processed/pothole/: a contract Observation needs a position, so without a GPS fix
+            // the detection is logged (below) but no record is written.
+            if (fix != null) {
+                val annotated = annotate(bmp, dets)
+                val frameJpeg = jpeg(annotated, 85)
                 annotated.recycle()
-                val illum = Messages.illumination(meanLuma(clean))
                 dets.forEachIndexed { i, d ->
                     val id = obsIds[i]
-                    val crop = crop(clean, d)
+                    val base = "$stamp-$id"
+                    val crop = crop(bmp, d)
                     val cropJpeg = jpeg(crop, 90)
-                    storage.write(File(dir, "crops/$id.jpg"), cropJpeg)
-                    var toHelpful = false
-                    if (fix != null) {
-                        val base = "$stamp-obs-$id"
-                        storage.writeHelpful("$base.jpg", cropJpeg)
-                        val obs = Messages.observation(
-                            id, who, f.cameraId, f.captureMs, d.score, fix, d, illum,
-                            evidenceUri = "edge://${who.deviceId}/helpful/$base.jpg",
-                            evidenceSha256 = Messages.sha256Hex(cropJpeg),
-                            evidenceBytes = cropJpeg.size,
-                            model = model,
-                        )
-                        storage.writeHelpful("$base.json", obs.toString().toByteArray())
-                        toHelpful = true
-                    }
-                    addFinding(Finding(id, f.cameraId, d.score, f.captureMs, thumb(crop), toHelpful))
+                    storage.writeRecord("pothole", "$base.jpg", cropJpeg)
+                    storage.writeRecord("pothole", "$base-frame.jpg", frameJpeg)
+                    val obs = Messages.observation(
+                        id, who, f.cameraId, f.captureMs, d.score, fix, d, illum,
+                        evidenceUri = "edge://${who.deviceId}/processed/pothole/$base.jpg",
+                        evidenceSha256 = Messages.sha256Hex(cropJpeg),
+                        evidenceBytes = cropJpeg.size,
+                        model = model,
+                    )
+                    storage.writeRecord("pothole", "$base.json", obs.toString().toByteArray())
+                    addFinding(Finding(id, f.cameraId, d.score, f.captureMs, thumb(crop), saved = true))
                     crop.recycle()
                 }
-                if (fix == null) helpfulNote = "no_gnss_fix"
-                showInferred(f.cameraId, clean, dets)
-                clean.recycle()
+            } else {
+                dets.forEachIndexed { i, d ->
+                    val crop = crop(bmp, d)
+                    addFinding(Finding(obsIds[i], f.cameraId, d.score, f.captureMs, thumb(crop), saved = false))
+                    crop.recycle()
+                }
             }
+            showInferred(f.cameraId, bmp, dets)
         }
 
-        storage.appendLine(File(dir, "detections.jsonl"), buildJsonObject {
+        storage.appendLine(log, buildJsonObject {
             put("captured_at", Time.rfc3339(f.captureMs))
             put("camera_id", f.cameraId)
             put("seq", f.seq)
@@ -280,6 +304,7 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
                 fix.speedMs?.let { put("speed_ms", it) }
             }
             put("odometer_m", location.odometerM)
+            put("dataset_frame", capture)
             putJsonArray("detections") {
                 dets.forEachIndexed { i, d -> addJsonObject {
                     put("observation_id", obsIds[i])
@@ -287,7 +312,7 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
                     putJsonArray("bbox_px") { add(d.x1); add(d.y1); add(d.x2); add(d.y2) }
                 } }
             }
-            put("helpful", helpfulNote)
+            put("record", saved)
         }.toString())
         bmp.recycle()
 
@@ -295,13 +320,12 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
             it.copy(
                 inferences = it.inferences + 1,
                 potholes = it.potholes + dets.size,
-                helpfulWritten = it.helpfulWritten + if (helpfulNote == "written") dets.size else 0,
+                recordsWritten = it.recordsWritten + if (saved == "saved") dets.size else 0,
                 inferenceFps = inferFps.fps(now),
                 lastInferenceMs = inferMs,
-                notice = when (helpfulNote) {
-                    "no_gnss_fix" -> "No GPS fix — potholes kept in processed/ only, not sent to helpful/"
-                    "face_blur_failed" -> "Face blur failed — frame not stored (privacy gate)"
-                    "written" -> null
+                notice = when (saved) {
+                    "no_gnss_fix" -> "No GPS fix — potholes are logged but not saved as records until there is a position"
+                    "saved" -> null
                     else -> it.notice
                 },
             )
@@ -318,14 +342,14 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
             val msg = Messages.telemetry(
                 Messages.Identity(prefs.deviceId, prefs.busId, prefs.routeId), now, fix,
                 uptimeS = (now - startedMs) / 1000,
-                queueDepth = storage.helpfulPending.value,
-                queueOldestS = storage.oldestHelpfulAgeS(now),
+                queueDepth = storage.counts.value["pothole"] ?: 0,
+                queueOldestS = 0,
                 inferenceFps = inferFps.fps(now),
                 camerasOnline = server.cameraIds().toList(),
                 cameraQuality = emptyMap(),
                 model = modelInfo(det),
             )
-            runCatching { storage.writeHelpful("${Time.compact(now)}-tlm.json", msg.toString().toByteArray()) }
+            runCatching { storage.writeRecord("telemetry", "${Time.compact(now)}.json", msg.toString().toByteArray()) }
         }
     }
 
@@ -373,7 +397,8 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
         put("app_version", BuildConfig.VERSION_NAME)
         put("session_running", s.running)
         s.sessionId?.let { put("session_id", it) }
-        put("helpful_pending", storage.helpfulPending.value)
+        putJsonObject("records") { storage.counts.value.forEach { (c, n) -> put(c, n) } }
+        put("dataset_capture", dataset.active)
         put("potholes_this_session", s.potholes)
         putJsonArray("cameras") {
             server.links.value.values.forEach { l -> addJsonObject {
@@ -396,6 +421,8 @@ class EdgeEngine(private val context: Context, private val prefs: Prefs) {
         put("app_version", BuildConfig.VERSION_NAME)
         put("gate_mode", prefs.gateMode.name.lowercase())
         put("confidence_threshold", prefs.confidenceThreshold)
+        put("dataset_capture", prefs.captureEnabled)
+        put("dataset_spacing_m", prefs.captureSpacingM)
         detector?.let { d -> putJsonObject("model") { put("name", d.modelName); put("version", d.modelVersion); put("runtime", d.runtime) } }
     }
 

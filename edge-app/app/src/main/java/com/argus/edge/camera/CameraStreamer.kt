@@ -16,9 +16,6 @@ import kotlin.math.max
  */
 class CameraStreamer(
     private val client: FrameClient,
-    private val targetFps: Int = 10,
-    private val maxEdge: Int = 1280,
-    private val jpegQuality: Int = 80,
 ) : ImageAnalysis.Analyzer {
 
     private var lastSentMs = 0L
@@ -27,14 +24,15 @@ class CameraStreamer(
     override fun analyze(image: ImageProxy) {
         try {
             val nowMs = System.currentTimeMillis()
-            if (!client.isStreaming || nowMs - lastSentMs < 1000L / targetFps) return
+            val cfg = client.config.value
+            if (!client.isStreaming || nowMs - lastSentMs < 1000L / cfg.fps) return
             lastSentMs = nowMs
 
             val captureMs = captureWallMs(image.imageInfo.timestamp, nowMs)
-            val upright = upright(image.toBitmap(), image.imageInfo.rotationDegrees)
+            val upright = upright(image.toBitmap(), image.imageInfo.rotationDegrees, cfg.maxEdge)
 
             out.reset()
-            upright.compress(Bitmap.CompressFormat.JPEG, jpegQuality, out)
+            upright.compress(Bitmap.CompressFormat.JPEG, cfg.jpegQuality, out)
             client.offer(captureMs, out.toByteArray(), upright.width, upright.height)
             upright.recycle()
         } finally {
@@ -42,7 +40,7 @@ class CameraStreamer(
         }
     }
 
-    private fun upright(src: Bitmap, rotation: Int): Bitmap {
+    private fun upright(src: Bitmap, rotation: Int, maxEdge: Int): Bitmap {
         val scale = maxEdge.toFloat() / max(src.width, src.height)
         if (rotation == 0 && scale >= 1f) return src
         val m = Matrix().apply {
