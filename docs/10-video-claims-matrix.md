@@ -57,7 +57,7 @@ every phrasing one tier down.
 | E5 | Specific FPS or accuracy figures | **DO NOT SAY** — until measured | Quote **no** numbers you haven't run. Say "measured on the phone under soak", not "runs at 30 fps". |
 | E6 | Bandwidth-aware uplink: severity-ranked, age-compensated, store-and-forward | **BUILT** (in the mock) | Queue depth as a live KPI |
 | E7 | Distance-gated sampling — surveys per metre of road, not per second | **COMMITTED** | ~8% duty cycle |
-| E8 | Faces blurred **on-device before storage** | **COMMITTED** | Privacy gate in the pipeline |
+| E8 | Faces blurred | **DO NOT SAY** — deferred | Not built; to be done later ([`docs/08`](08-privacy-and-compliance.md#face-blurring-deferred)). Do not claim any blurring in the video. |
 
 ## Claims about the platform
 
@@ -169,5 +169,6 @@ about a demo.
 | Date | Change |
 |---|---|
 | 2026-09-22 | Created. All tiers assigned from the design. Nothing BUILT except the mock frontend and the bandwidth arithmetic. |
+| 2026-09-25 | Edge app v0.2.0: one `processed/<category>/` folder (read-only API, backend keeps a cursor, never deletes); dataset capture for training; face blurring removed and deferred — E8 → DO NOT SAY. |
 | 2026-09-25 | Edge app v0.1.0: camera + processing roles, streaming, pothole detection (prototype YOLO11n), processed/ + helpful/ folders, local API. E1a, E1b → BUILT. Pothole *geo* is still the bus position (no IPM yet). |
 | 2026-09-25 | D11: edge moves to Android phones (2 camera phones → 1 edge phone). E1a added. E2 recomputed for two cameras. E3/E4 re-scoped to the phone; dedicated-board comparison moved to E4a, ROADMAP (PPT next step). |

@@ -95,7 +95,7 @@ argus/
 | [`05-frontend.md`](docs/05-frontend.md) | The two views, the Bengaluru map pipeline, the visual system |
 | [`06-data-contracts.md`](docs/06-data-contracts.md) | Message-by-message walkthrough with worked examples |
 | [`07-analytics-methods.md`](docs/07-analytics-methods.md) | **The maths.** Congestion, crowd density, ward scorecard, O–D, route delay |
-| [`08-privacy-and-compliance.md`](docs/08-privacy-and-compliance.md) | DPDP Act 2023, on-device blurring, retention, audit |
+| [`08-privacy-and-compliance.md`](docs/08-privacy-and-compliance.md) | DPDP Act 2023, retention, audit; face blurring deferred |
 | [`09-build-plan.md`](docs/09-build-plan.md) | 10 weeks, 4 people, named owners, phase exit criteria |
 | [`10-video-claims-matrix.md`](docs/10-video-claims-matrix.md) | **Every claim the submission video may make**, and its evidence status |
 | [`11-hardware-benchmark.md`](docs/11-hardware-benchmark.md) | Phone setup measured under soak now; dedicated boards (Orin, Pi+Hailo) after the MVP |

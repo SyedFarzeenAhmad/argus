@@ -64,7 +64,7 @@ Four go up, one comes down. The edge never sees an `asset`; the frontend never s
   "evidence": {
     "uri": "s3://argus-evidence/2026/11/04/obs-8f3a91c2.jpg",
     "sha256": "4d9f...c1a7", "bytes": 46218,
-    "quality": 0.81, "faces_blurred": true
+    "quality": 0.81
   },
   "model": {
     "name": "argus-road-defect", "version": "0.4.2",
@@ -207,7 +207,6 @@ would have a box about a seventh the area.
     "duration_s": 30.0,
     "cameras": ["front", "rear"],
     "plate_crop_uri": "s3://argus-evidence/incidents/e71b0d55-plate.jpg",
-    "faces_blurred": true,
     "encrypted": true
   },
   "model": { "name": "argus-behaviour", "version": "0.3.1", "runtime": "nnapi-int8" }
@@ -295,7 +294,7 @@ Backend → frontend only. The same pothole after nine days of passes:
 
   "canonical_evidence": {
     "uri": "s3://argus-evidence/2026/10/29/obs-1c77e0a3.jpg",
-    "sha256": "7e01...9bb2", "quality": 0.94, "faces_blurred": true
+    "sha256": "7e01...9bb2", "quality": 0.94
   },
 
   "work_order": {

@@ -116,7 +116,7 @@ fetched from the internet at runtime.
 
 ### D7 — Privacy designed in
 
-On-device face blurring before any frame touches disk, enforced at the ingest boundary. ANPR only
+Face blurring **deferred** (2026-09-25): to be designed and built later, most likely in the backend — see docs/08. ANPR only
 on incident subject tracks, audit-logged. No face recognition, no demographic inference, no
 cross-city vehicle re-identification — the school-children clause is answered with OSM school
 zones and the clock instead. Tiered retention; the indefinitely-retained analytics contain no

@@ -251,7 +251,7 @@ paid for in *edge-phone* compute, because that is where every model runs.
 | **Front** | ✅ phone | full (distance-gated + 15 Hz track) | everything | The primary sensor. Road ahead, traffic, VRUs, incidents. |
 | **Rear** | ✅ phone | 5 Hz, **escalates to full on incident** | vehicle detect, plate | The tailgater's plate is behind the bus. Idle most of the time; the incident trigger wakes it. |
 | Left / right | roadmap | 1 Hz | encroachment, footpath, stop-area crowd | Side content changes slowly and is about static infrastructure, not events. |
-| Cabin | roadmap | 0.2 Hz | occupancy count only, **faces blurred pre-storage** | Occupancy for load analytics. See [`08`](08-privacy-and-compliance.md). |
+| Cabin | roadmap | 0.2 Hz | occupancy count only (face blurring: see docs/08) | Occupancy for load analytics. See [`08`](08-privacy-and-compliance.md). |
 
 Camera phones always stream at their full encoded rate; the **edge phone decides what to
 decode and infer**. The rear stream is decoded at 5 Hz until an incident trigger, then at full
@@ -472,13 +472,9 @@ Inherited directly from the internal-round mock, which got this right:
 
 ## The privacy gate
 
-Faces are blurred **before any frame is written to disk or entered into the queue** — not at
-the server, not at display time. Camera phones never write frames to disk at all; they only
-stream, over a hotspot that has no route to the internet. A lightweight face detector runs on every crop destined for
-storage, and `Evidence.faces_blurred` is set accordingly. Ingest rejects any evidence crop
-containing people with that flag unset.
-
-Full reasoning and the DPDP Act position: [`docs/08`](08-privacy-and-compliance.md).
+**Face blurring is deferred** — it will be designed and built later, when it is time (most
+likely in the backend). See [`docs/08`](08-privacy-and-compliance.md#face-blurring-deferred).
+Camera phones still store nothing, and nothing leaves the bus over cellular except findings.
 
 ---
 
@@ -506,6 +502,19 @@ Full reasoning and the DPDP Act position: [`docs/08`](08-privacy-and-compliance.
 - **Labelling:** ~2,000–3,000 frames, in Label Studio or CVAT, split between both CV members.
   Distance-gated extraction means the frames are spatially spread rather than 3,000
   near-duplicates from one junction — sample at 10 m intervals.
+<a id="dataset-capture"></a>
+- **Capture tool: the edge app itself.** On the processing client, *Record training frames*
+  switches every camera phone to 1080p / light JPEG and saves a **clean frame from every camera
+  every 10 m of travel, whether or not a pothole was seen** — negatives are half of what a model
+  needs. Nothing is drawn on the frames. Per drive it writes
+  `dataset/<session>_<route>/`: `frames/<camera>/*.jpg`, `manifest.jsonl` (time, camera, GNSS,
+  speed, heading, illumination per frame), and `prelabels/<camera>/*.txt` — the prototype
+  model's boxes in YOLO format, to import into CVAT as a starting point, never as ground
+  truth. It stops itself below 1 GB free. Roughly 3,000 frames per camera per 30 km drive.
+  Pull with `adb pull /sdcard/Android/data/com.argus.edge/files/argus/dataset/`.
+- **Frames are stored as captured.** Face blurring is deferred and will be done later
+  ([`docs/08`](08-privacy-and-compliance.md#face-blurring-deferred)), before any frame is
+  labelled or shared.
 - **Split discipline:** split **by route, not by frame.** Random frame splits leak — adjacent
   frames of the same pothole land in train and test and the reported mAP becomes fiction. A
   held-out *route* is the only honest test set.
@@ -533,7 +542,6 @@ edge-app/                    CV–Edge: Kotlin Android app, one APK, two roles
 │   ├── tracking/            ByteTrack, track lifecycle, kinematics
 │   ├── geo/                 pose interpolation, IPM, map matching over the baked road graph
 │   ├── fusion/              per-pass aggregation: unique counts, occupancy, inspected_for
-│   ├── privacy/             face blur before anything touches storage
 │   ├── uplink/              priority queue, SQLite spool, MQTT client
 │   └── config/              per-camera calibration, camera URIs + policy, thresholds
 ├── app/src/main/assets/     the ONNX model(s) + class list + baked road graph, packed into the APK
@@ -550,15 +558,18 @@ Install `edge-app/release/argus-edge-<version>.apk` on every phone (full guide:
 2. **Processing phone:** ARGUS → *Processing client*. Set device, bus and route in settings.
 3. **Each camera phone:** ARGUS → *Camera* → pick its position → tap the processing client (or
    type its address). It re-links by itself after a reboot.
-4. **Processing phone → ▶.** Potholes are written to `processed/` (full record) and, when there
-   is a GPS fix, to `helpful/` (contract messages the backend pulls and deletes —
-   [`docs/04`](04-backend.md#edge-helpful-consumer)).
+4. **Processing phone → ▶.** Each pothole with a GPS fix becomes a contract `Observation` in
+   `processed/pothole/` (+ crop + frame); every inference is logged in `processed/log/`. The
+   backend reads `processed/` over a read-only API and never deletes
+   ([`docs/04`](04-backend.md#edge-processed-consumer)).
+5. **Collecting training data?** Turn on *Record training frames* — see
+   [dataset capture](#dataset-capture).
 
 **Demo path — no bus required.** *Test video* on the processing screen plays a video file as
 one more linked camera. Same frame path, same models. Sampling is distance-gated (5 m); the
 *Every 0.5 s (test)* switch exists for bench tests without movement.
 
-**Replay log.** `helpful/` already holds contract-format messages; `adb pull` it (or pull
+**Replay log.** `processed/` already holds contract-format messages; `adb pull` it (or pull
 through the local API) into `ops/replay/logs/` to build the demo-day fallback log.
 
 ## Validation gates

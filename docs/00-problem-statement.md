@@ -95,8 +95,8 @@ Being explicit about this is worth more than quietly over-claiming.
 **Side and cabin cameras.** The brief lists front, rear, sides and cabin. The MVP fits front
 and rear camera phones; a camera is one more RTSP URI in config, so sides and cabin are a
 roadmap item bounded by edge-phone compute, not a redesign. When fitted, cabin cameras are
-used for occupancy estimation and in-cabin safety only, with **on-device face blurring before any frame is
-persisted or transmitted**. We do not do passenger identification, behaviour scoring or
+used for occupancy estimation and in-cabin safety only, with face blurring as decided in
+[`docs/08`](08-privacy-and-compliance.md#face-blurring-deferred) (deferred for the MVP). We do not do passenger identification, behaviour scoring or
 emotion inference. See [`docs/08`](08-privacy-and-compliance.md).
 
 **"Origin–destination traffic patterns" (B5).** True vehicle-level O–D requires

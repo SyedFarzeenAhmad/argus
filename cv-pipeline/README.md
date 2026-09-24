@@ -63,6 +63,15 @@ cp models/argus-road-defect-<ver>.onnx ../edge-app/app/src/main/assets/
 - Calibration report (reliability diagram + ECE)
 - Loads and runs in ONNX Runtime Android on the edge phone
 
+## Where our own frames come from
+
+The edge app's **Record training frames** mode ([`docs/03`](../docs/03-cv-pipeline.md#dataset-capture))
+produces one folder per drive: clean 1080p frames every 10 m from every camera, a manifest with
+GNSS and conditions, and the prototype's boxes as YOLO pre-labels. Import frames + pre-labels
+into CVAT, correct them, and keep the per-drive folder name (it carries the route) through to
+the split. Frames are stored as captured: face blurring is deferred and must be done before
+labelling or sharing ([`docs/08`](../docs/08-privacy-and-compliance.md#face-blurring-deferred)).
+
 ## Dataset discipline
 
 **Split by route, never by frame.** Adjacent frames of the same pothole landing in both train

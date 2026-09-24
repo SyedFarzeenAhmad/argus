@@ -209,7 +209,7 @@ arrival*, *morning peak*, *midday*, *evening peak*, *night*.
   side of a divided road are not observed.
 - Strongly **biased to bus corridors**. The coverage layer is on by default for this reason.
 - Sampled at pass times, so a crowd that assembles and disperses between two buses is missed.
-- **Never identity, never demographics.** Counts and trajectories only; faces blurred on-device
+- **Never identity, never demographics.** Counts and trajectories only; face blurring deferred (docs/08)
   before storage. See [`docs/08`](08-privacy-and-compliance.md).
 
 ---

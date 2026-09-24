@@ -46,9 +46,9 @@ This week has one job beyond the video: make it impossible for anyone to be bloc
 
 **Status 2026-09-25 — CV-Edge week-1 row done, and more:** the edge app v0.1.0 has camera and
 processing roles, N-camera streaming with clock sync, on-device pothole detection (prototype
-model), distance gating, face blur, `processed/` + `helpful/` folders and the local API. The
-backend's first task follows from it: the `helpful/` consumer
-([`docs/04`](04-backend.md#edge-helpful-consumer)). Still owed by CV-Edge for the slice: IPM +
+model), distance gating, the `processed/` folder and the local API. The
+backend's first task follows from it: the read-only `processed/` consumer
+([`docs/04`](04-backend.md#edge-processed-consumer)). Still owed by CV-Edge for the slice: IPM +
 calibration (so `geo` is the pothole, not the bus) and the MQTT uplink.
 
 ### The week-1 trap to avoid
@@ -101,7 +101,7 @@ tests green. Fusion property tests green.
 | Owner | Weeks 5–7 |
 |---|---|
 | **CV-Perception** | All remaining defect classes. Road-surface segmentation. Vehicle + VRU detection **with auto-rickshaw**. Condition heads for sign/divider/zebra. Multi-task backbone — **with the three-independent-models fallback kept live until week 6.** |
-| **CV-Edge** | ByteTrack integration (Kotlin). Unique-track counting, occupancy ratio, PCU. Pedestrian counting with `observed_area_m2`. Multi-camera policy: rear at 5 Hz with incident escalation. Privacy gate (face blur). INT8 quantisation + delta check on the phone NPU. Camera-dropout handling (stream loss → `inspected_for`). |
+| **CV-Edge** | ByteTrack integration (Kotlin). Unique-track counting, occupancy ratio, PCU. Pedestrian counting with `observed_area_m2`. Multi-camera policy: rear at 5 Hz with incident escalation. INT8 quantisation + delta check on the phone NPU. Camera-dropout handling (stream loss → `inspected_for`). |
 | **Backend** | **Road Asset Ledger**: OSM expectation loading, negative-evidence accumulation, `missing_*` inference, auto-resolution. Congestion + pedestrian-density continuous aggregates. Ward scorecard. Coverage endpoint. Work orders + CSV export. |
 | **Frontend** | Analytics view: MapLibre + deck.gl, congestion `PathLayer`, density `H3HexagonLayer`, ward choropleth, coverage layer. Time scrubber. Legends with units. Ward scorecard panel. |
 
@@ -185,7 +185,7 @@ Decided now, calmly, rather than at 2 a.m. in week 9. Cut from the bottom:
 | 5. Rear camera phone | Front only; no rear plate for tailgating incidents | Front does the heavy lifting; N-camera support is config, and the policy is documented |
 | 6. Long-tail open-vocab triage | Trained classes only | Was always human-triage, never automated |
 
-**Never cut:** the fusion worker, negative evidence, the coverage layer, on-device face blurring,
+**Never cut:** the fusion worker, negative evidence, the coverage layer,
 or the honesty caveats in [`docs/07`](07-analytics-methods.md). Those are the difference between
 this platform and a dashcam with a dashboard, and every one of them is cheap to keep.
 

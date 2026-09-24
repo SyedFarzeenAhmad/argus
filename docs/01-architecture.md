@@ -45,8 +45,8 @@
 ║      └───────────────┬──────────────────────────────┘        ║
 ║                      ▼                                        ║
 ║      ┌──────────────────────────────────────────────┐        ║
-║      │ PRIVACY GATE  — faces blurred BEFORE any      │        ║
-║      │ frame is written to disk or queued            │        ║
+║      │ PRIVACY GATE  — face blurring DEFERRED        │        ║
+║      │ (docs/08) — to be built later                 │        ║
 ║      └───────────────┬──────────────────────────────┘        ║
 ║                      ▼                                        ║
 ║      ┌──────────────────────────────────────────────┐        ║
@@ -157,7 +157,7 @@ form of interface discipline that survives a hackathon deadline.
  t+0.016  Detection lat/lon = bus position + 11.4 m @ 118.4° + lateral offset.
  t+0.018  Map-match → osm:way/23847561:3, offset 127 m, ward bbmp:150.
  t+0.021  Severity from physical area, not confidence → 0.44, band "medium".
- t+0.024  Crop written, face-blur pass (no faces), SHA-256 computed.
+ t+0.024  Crop written, SHA-256 computed.
  t+0.026  Observation enqueued. Queue depth 7.
  t+3.400  Uplink: severity+age ranked it first. 1.9 KB JSON + 46 KB JPEG.
  t+3.9    Ingest validates, verifies hash, writes to hypertable.

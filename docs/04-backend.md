@@ -25,7 +25,7 @@ a public depot, and a leaked shared secret would compromise the whole fleet. Cer
 be revoked individually.
 
 There are two ways messages arrive: MQTT (the design) and, for the phone MVP, a pull from the
-processing client's `helpful/` folder ([below](#edge-helpful-consumer)). Both end in the same
+processing client's `processed/` folder ([below](#edge-processed-consumer)). Both end in the same
 ingest steps. The ingest worker, per message:
 
 1. **Validate** against the JSON Schema in `contracts/`. Reject on major-version mismatch.
@@ -33,9 +33,8 @@ ingest steps. The ingest worker, per message:
    duplicates are normal operation, not an error.
 3. **Verify the evidence hash.** Recompute SHA-256 on the stored crop and compare. This is the
    chain of custody; an incident clip that may end up in an enforcement process needs one.
-4. **Reject unblurred evidence.** Any crop flagged as containing people with
-   `faces_blurred: false` is refused and the device is flagged. Enforced at the boundary, not
-   trusted from the edge.
+4. **Face blurring — deferred.** To be designed later, most likely here in the backend
+   ([`docs/08`](08-privacy-and-compliance.md#face-blurring-deferred)). No check at ingest for now.
 5. **Stamp receipt time** and write to the raw hypertable. Raw tables are **immutable and
    append-only** — nothing ever updates an observation.
 6. **Notify** the fusion worker via Redis.
@@ -45,87 +44,89 @@ component that must never be the bottleneck or the source of a subtle data bug.
 
 ---
 
-<a id="edge-helpful-consumer"></a>
-## Consuming the edge phone's `helpful/` folder — MVP hand-off
+<a id="edge-processed-consumer"></a>
+## Consuming the processing client's `processed/` folder — MVP hand-off
 
 > **Backend developer: this is yours to build.** Until the edge app publishes over MQTT, the
-> processing-client phone does not push anything. It writes contract-format messages into a
-> local `helpful/` folder and serves that folder over a small HTTP API. The backend **pulls**
-> from it, stores what it pulled, and **deletes each file once it has been consumed**.
+> processing-client phone does not push anything. It writes contract-format messages into
+> `processed/<category>/` and serves them over a small **read-only** HTTP API. The backend
+> **pulls** new records, stores them, and remembers how far it has read. **It does not delete
+> anything on the phone** — the phone keeps its record.
 
 ### What is on the phone
 
-The processing client keeps two folders ([`edge-app/`](../edge-app/README.md)):
+`/sdcard/Android/data/com.argus.edge/files/argus/` on the processing client
+([`edge-app/`](../edge-app/README.md)):
 
-| Folder | Contents | Who reads it |
+| Folder | Contents | Backend reads it? |
 |---|---|---|
-| `argus/processed/<session>/` | The full local record: every inference on every camera (`detections.jsonl`), annotated frames, crops. Faces already blurred. | Nobody off-phone. Debugging, labelling, audits. Never deleted by the backend. |
-| `argus/helpful/` | Only what the servers need: one `Observation` JSON + its evidence JPEG per pothole found, and a `Telemetry` JSON every 30 s. Exactly the shapes in `contracts/schemas/`. | **The backend consumer**, which deletes what it consumed. |
+| `processed/pothole/` | per pothole: `<utc>-<id>.json` (contract `Observation`), `<utc>-<id>.jpg` (evidence crop), `<utc>-<id>-frame.jpg` (full frame with the box drawn, for review) | **Yes** |
+| `processed/telemetry/` | `<utc>.json` — contract `Telemetry`, every 30 s | **Yes** |
+| `processed/log/` | `<session>.jsonl` — one line per inference, every camera, including frames with nothing found | No (debugging, audits; `adb pull`) |
+| `dataset/<session>_<route>/` | clean training frames + manifest + YOLO pre-labels ([`docs/03`](03-cv-pipeline.md#dataset-capture)) | No — pulled by CV-Perception for training |
 
-File names start with a sortable UTC timestamp, so listing order is capture order:
+Only categories with a model behind them exist today. As models land, more appear alongside
+`pothole/` (e.g. `incidents/`, `traffic_counting/`) with the same file conventions, and the
+consumer should read whatever categories `GET /processed` lists rather than a hard-coded set.
 
-```
-20260925T081425123Z-obs-0b9e7c7e-6a2f-4c7b-9a0e-3f1d2c4b5a69.json   observation
-20260925T081425123Z-obs-0b9e7c7e-6a2f-4c7b-9a0e-3f1d2c4b5a69.jpg    its evidence crop
-20260925T081430000Z-tlm.json                                         telemetry
-```
-
-A file only appears once fully written (the phone writes to a temp file and renames), and an
-observation's JPEG is always written **before** its JSON.
+File names start with a sortable UTC timestamp, so **name order = capture order**. A file
+appears only once fully written (temp file + rename), and a pothole's JPEGs are always written
+before its JSON.
 
 ### The API
 
-Served by the processing client on port **8080** of its local IP (shown on its screen, e.g.
-`http://192.168.43.1:8080`). Every `/api` call needs the token shown on the phone:
-`Authorization: Bearer <token>` (or `?token=` for quick manual checks).
+Port **8080** on the processing client's local IP (shown on its screen). Every `/api` call
+needs the token shown on the phone: `Authorization: Bearer <token>`. **GET only.**
 
-| Method | Path | Returns |
-|---|---|---|
-| `GET` | `/api/v1/status` | device id, bus, route, session state, linked cameras, GNSS, pending count |
-| `GET` | `/api/v1/helpful` | `{count, files: [{name, type, bytes, modified_at, url}]}`, oldest first. `type` ∈ `observation`, `evidence`, `telemetry` |
-| `GET` | `/api/v1/helpful/{name}` | the file — `application/json` or `image/jpeg` |
-| `DELETE` | `/api/v1/helpful/{name}` | `204`. Deleting an observation JSON **also deletes its JPEG**. |
+| Path | Returns |
+|---|---|
+| `/api/v1/status` | device, bus, route, session state, cameras, GNSS, record counts |
+| `/api/v1/processed` | `{categories: {pothole: {records, url}, telemetry: {…}}}` |
+| `/api/v1/processed/{category}?after=<name>&limit=<n>` | `{count, next_after, files: [{name, type, bytes, modified_at, url}]}`, oldest first, only names **after** the cursor. `type` ∈ `observation`, `evidence`, `frame`, `telemetry`. `limit` default 500. |
+| `/api/v1/processed/{category}/{name}` | the file — `application/json` or `image/jpeg` |
 
 ```bash
 T=<token from the phone>; E=http://192.168.43.1:8080/api/v1
-curl -s -H "Authorization: Bearer $T" $E/helpful | jq
-curl -s -H "Authorization: Bearer $T" $E/helpful/<name>.json | jq
-curl -s -X DELETE -H "Authorization: Bearer $T" $E/helpful/<name>.json -o /dev/null -w '%{http_code}\n'
+curl -s -H "Authorization: Bearer $T" $E/processed | jq
+curl -s -H "Authorization: Bearer $T" "$E/processed/pothole?limit=20" | jq
+curl -s -H "Authorization: Bearer $T" "$E/processed/pothole?after=<next_after from last call>" | jq
 ```
 
 ### The consumer to write — `argus_api/ingest/edge_pull.py`
 
 Configured with a list of edge units (`ARGUS_EDGE_UNITS=http://192.168.43.1:8080|<token>,...`).
-For each unit, every ~5 s:
+Keeps a **cursor per (device_id, category)** in the database: the name of the last file it
+has fully stored. Every ~5 s, per unit and per category from `GET /processed`:
 
-1. `GET /helpful`. Take the **`.json`** entries in order (JPEGs are fetched through their
-   observation, never on their own).
-2. `GET` the JSON and **validate** it against `contracts/schemas/` — the same validation as
-   MQTT ingest step 1. `observation_id` present → observation; `health` present → telemetry.
+1. `GET /processed/{category}?after=<cursor>`. Take the **`.json`** entries in order; JPEGs are
+   fetched through their observation.
+2. `GET` the JSON and **validate** it against `contracts/schemas/` (ingest step 1).
 3. **Observation:** `GET` the evidence JPEG named in `evidence.uri`
-   (`edge://<device_id>/helpful/<name>.jpg` → `/api/v1/helpful/<name>.jpg`). Recompute its
-   SHA-256 and compare with `evidence.sha256` (ingest step 3). Upload it to MinIO and
-   **rewrite `evidence.uri`** to the `s3://argus-evidence/...` key before storing.
-4. Hand the message to the **same ingest path as MQTT** — dedupe by id, reject unblurred
-   evidence, stamp receipt, write the raw hypertable, notify fusion (ingest steps 2, 4–6).
-5. **Only after the database commit succeeds**, `DELETE` the JSON. That is the consumption
-   acknowledgement; the phone then frees the space.
+   (`edge://<device_id>/processed/pothole/<name>.jpg` → `/api/v1/processed/pothole/<name>.jpg`).
+   Recompute its SHA-256 and compare with `evidence.sha256` (ingest step 3). Upload it to
+   MinIO and **rewrite `evidence.uri`** to the `s3://argus-evidence/...` key before storing.
+   The `-frame.jpg` is optional context; store it too if the review UI wants it.
+4. Hand the message to the **same ingest path as MQTT** — dedupe by id, stamp receipt, write
+   the raw hypertable, notify fusion (ingest steps 2, 5, 6).
+5. **After the database commit**, advance the cursor to that file's name, in the same
+   transaction as the rows.
 
 **Rules that keep it correct:**
 
-- **Never delete before the commit.** A crash between commit and delete just means the file is
-  read again next poll, and dedupe-by-id makes the second read harmless. A crash between
-  delete and commit loses data. So: commit, then delete — at-least-once, like MQTT QoS 1.
-- **Don't delete what failed validation or hash verification.** Log it, skip it for the rest of
-  the run, and surface it on the fleet-health panel; the file stays on the phone for someone to
-  inspect. Deleting it would destroy the evidence of the bug.
-- **Telemetry** is consumed the same way (validate → store → delete). It has no JPEG.
+- **Never delete on the phone.** There is no delete endpoint. Re-reading is harmless — dedupe
+  by `observation_id` makes a second read a no-op — so a lost cursor only costs a re-scan.
+- **Cursor and rows commit together.** If the cursor moves without the rows, data is skipped;
+  if the rows commit without the cursor, the file is just read again.
+- **Don't skip past a file that failed** validation or hash verification: log it, surface it on
+  the fleet-health panel, and move the cursor past it only once someone has looked.
 - The consumer has to be on the same network as the phone (in development, a laptop joined to
   the processing phone's hotspot).
+- **Phone storage is not managed by the backend.** Someone clears old records on the phone by
+  hand (or a future retention setting does). The consumer must cope with files disappearing.
 
-**Later:** when the edge app gains its MQTT uplink, `helpful/` becomes the store-and-forward
-spool behind it and this pull path is kept as the fallback for phones that come back to the
-depot with a backlog.
+**Later:** when the edge app gains its MQTT uplink, the same records are published as they are
+written, and this pull path stays as the fallback for phones that return to the depot with a
+backlog.
 
 ---
 
