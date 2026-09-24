@@ -1,12 +1,12 @@
 [project]
-name = "argus-edge"
+name = "argus-perception"
 version = "0.1.0"
-description = "ARGUS onboard edge-AI pipeline — video in, Observations out"
+description = "ARGUS CV-Perception — datasets, training, ONNX export, calibration. The on-bus runtime is edge-app/ (Android)."
 requires-python = ">=3.11"
 
 dependencies = [
-  # Inference. ONNX Runtime is the portability layer: one model artefact, four
-  # execution providers, no per-target retraining. See docs/03.
+  # Inference for evaluation and the golden-frame reference. The same ONNX file ships
+  # inside the edge-app APK (ONNX Runtime Android). See docs/03.
   "onnxruntime>=1.20",
   "numpy>=1.26",
   "opencv-python-headless>=4.10",
@@ -15,8 +15,6 @@ dependencies = [
   "pyproj>=3.6",          # projections for IPM → lat/lon
   "shapely>=2.0",         # map matching candidate geometry
 
-  # Uplink
-  "paho-mqtt>=2.1",
   "pydantic>=2.9",        # models GENERATED from contracts/schemas — never hand-written
 
   "typer>=0.12",
@@ -25,11 +23,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Hardware execution providers. Installed per target, never all at once.
-orin    = ["onnxruntime-gpu>=1.20"]
+# GPU evaluation on the training box. The phone runtime is the ONNX Runtime Android AAR,
+# pulled by edge-app/'s Gradle build, not pip.
 cuda    = ["onnxruntime-gpu>=1.20"]
-# hailo  = HailoRT ships out-of-band from Hailo's SDK, not PyPI
-# android = built via the ONNX Runtime Mobile AAR, not pip
 
 # Training lives here rather than in a separate project so the export path and the
 # runtime path share one dependency set and cannot drift on preprocessing.
@@ -50,9 +46,6 @@ dev = [
   "ruff>=0.7",
   "mypy>=1.13",
 ]
-
-[project.scripts]
-argus-edge = "argus_edge.__main__:app"
 
 [tool.ruff]
 line-length = 100

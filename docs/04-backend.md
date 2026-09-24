@@ -24,22 +24,111 @@ certificate, not an API key in a config file — a bus is a physically accessibl
 a public depot, and a leaked shared secret would compromise the whole fleet. Certificates can
 be revoked individually.
 
-The ingest worker, per message:
+There are two ways messages arrive: MQTT (the design) and, for the phone MVP, a pull from the
+processing client's `processed/` folder ([below](#edge-processed-consumer)). Both end in the same
+ingest steps. The ingest worker, per message:
 
 1. **Validate** against the JSON Schema in `contracts/`. Reject on major-version mismatch.
 2. **Deduplicate** by `observation_id` / `segment_pass_id` — MQTT QoS 1 is *at least once*, so
    duplicates are normal operation, not an error.
 3. **Verify the evidence hash.** Recompute SHA-256 on the stored crop and compare. This is the
    chain of custody; an incident clip that may end up in an enforcement process needs one.
-4. **Reject unblurred evidence.** Any crop flagged as containing people with
-   `faces_blurred: false` is refused and the device is flagged. Enforced at the boundary, not
-   trusted from the edge.
+4. **Face blurring — deferred.** To be designed later, most likely here in the backend
+   ([`docs/08`](08-privacy-and-compliance.md#face-blurring-deferred)). No check at ingest for now.
 5. **Stamp receipt time** and write to the raw hypertable. Raw tables are **immutable and
    append-only** — nothing ever updates an observation.
 6. **Notify** the fusion worker via Redis.
 
 Ingest does no interpretation whatsoever. It is deliberately boring, because it is the one
 component that must never be the bottleneck or the source of a subtle data bug.
+
+---
+
+<a id="edge-processed-consumer"></a>
+## Consuming the processing client's `processed/` folder — MVP hand-off
+
+> **Backend developer: this is yours to build.** Until the edge app publishes over MQTT, the
+> processing-client phone does not push anything. It writes contract-format messages into
+> `processed/<category>/` and serves them over a small **read-only** HTTP API. The backend
+> **pulls** new records, stores them, and remembers how far it has read. **It does not delete
+> anything on the phone** — the phone keeps its record.
+
+### What is on the phone
+
+`/sdcard/Android/data/com.argus.edge/files/argus/` on the processing client
+([`edge-app/`](../edge-app/README.md)):
+
+| Folder | Contents | Backend reads it? |
+|---|---|---|
+| `processed/pothole/` | per pothole: `<utc>-<id>.json` (contract `Observation`, `class_id: pothole`), `<utc>-<id>.jpg` (evidence crop); per frame: `<utc>-<camera>-frame.jpg` (full frame, every box drawn, for review) | **Yes** |
+| `processed/damaged_road/` | same layout; `class_id: damaged_road` with `subclass` = `longitudinal_crack` / `transverse_crack` / `alligator_crack` (contract 1.1.0) | **Yes** |
+| `processed/traffic_counting/` | `<utc>-<camera>.json` — unique vehicles by class + pedestrians per camera per 30 s window. **Interim format** `argus.edge.traffic_window/0.1`, not a contract message: its contract home is `SegmentPass`, which needs map matching. Keys match `SegmentPass` so the mapping is one-to-one. | **Yes** — store as-is until SegmentPass exists |
+| `processed/telemetry/` | `<utc>.json` — contract `Telemetry`, every 30 s | **Yes** |
+| `processed/log/` | `<session>.jsonl` — one line per inference, every camera, including frames with nothing found | No (debugging, audits; `adb pull`) |
+| `dataset/<session>_<route>/` | clean training frames + manifest + YOLO pre-labels ([`docs/03`](03-cv-pipeline.md#dataset-capture)) | No — pulled by CV-Perception for training |
+
+Only categories with a model behind them exist today. As models land, more appear (e.g.
+`incidents/`) with the same file conventions, and the
+consumer should read whatever categories `GET /processed` lists rather than a hard-coded set.
+
+File names start with a sortable UTC timestamp, so **name order = capture order**. A file
+appears only once fully written (temp file + rename), and a pothole's JPEGs are always written
+before its JSON.
+
+### The API
+
+Port **8080** on the processing client's local IP (shown on its screen). Every `/api` call
+needs the token shown on the phone: `Authorization: Bearer <token>`. **GET only.**
+
+| Path | Returns |
+|---|---|
+| `/api/v1/status` | device, bus, route, session state, cameras, GNSS, record counts |
+| `/api/v1/processed` | `{categories: {pothole: {records, url}, telemetry: {…}}}` |
+| `/api/v1/processed/{category}?after=<name>&limit=<n>` | `{count, next_after, files: [{name, type, bytes, modified_at, url}]}`, oldest first, only names **after** the cursor. `type` ∈ `observation`, `evidence`, `frame`, `traffic_window`, `telemetry`. `limit` default 500. |
+| `/api/v1/processed/{category}/{name}` | the file — `application/json` or `image/jpeg` |
+
+```bash
+T=<token from the phone>; E=http://192.168.43.1:8080/api/v1
+curl -s -H "Authorization: Bearer $T" $E/processed | jq
+curl -s -H "Authorization: Bearer $T" "$E/processed/pothole?limit=20" | jq
+curl -s -H "Authorization: Bearer $T" "$E/processed/pothole?after=<next_after from last call>" | jq
+```
+
+### The consumer to write — `argus_api/ingest/edge_pull.py`
+
+Configured with a list of edge units (`ARGUS_EDGE_UNITS=http://192.168.43.1:8080|<token>,...`).
+Keeps a **cursor per (device_id, category)** in the database: the name of the last file it
+has fully stored. Every ~5 s, per unit and per category from `GET /processed`:
+
+1. `GET /processed/{category}?after=<cursor>`. Take the **`.json`** entries in order; JPEGs are
+   fetched through their observation.
+2. `GET` the JSON and **validate** it against `contracts/schemas/` (ingest step 1).
+3. **Observation:** `GET` the evidence JPEG named in `evidence.uri`
+   (`edge://<device_id>/processed/pothole/<name>.jpg` → `/api/v1/processed/pothole/<name>.jpg`).
+   Recompute its SHA-256 and compare with `evidence.sha256` (ingest step 3). Upload it to
+   MinIO and **rewrite `evidence.uri`** to the `s3://argus-evidence/...` key before storing.
+   The `-frame.jpg` is optional context; store it too if the review UI wants it.
+4. Hand the message to the **same ingest path as MQTT** — dedupe by id, stamp receipt, write
+   the raw hypertable, notify fusion (ingest steps 2, 5, 6).
+5. **After the database commit**, advance the cursor to that file's name, in the same
+   transaction as the rows.
+
+**Rules that keep it correct:**
+
+- **Never delete on the phone.** There is no delete endpoint. Re-reading is harmless — dedupe
+  by `observation_id` makes a second read a no-op — so a lost cursor only costs a re-scan.
+- **Cursor and rows commit together.** If the cursor moves without the rows, data is skipped;
+  if the rows commit without the cursor, the file is just read again.
+- **Don't skip past a file that failed** validation or hash verification: log it, surface it on
+  the fleet-health panel, and move the cursor past it only once someone has looked.
+- The consumer has to be on the same network as the phone (in development, a laptop joined to
+  the processing phone's hotspot).
+- **Phone storage is not managed by the backend.** Someone clears old records on the phone by
+  hand (or a future retention setting does). The consumer must cope with files disappearing.
+
+**Later:** when the edge app gains its MQTT uplink, the same records are published as they are
+written, and this pull path stays as the fallback for phones that return to the depot with a
+backlog.
 
 ---
 

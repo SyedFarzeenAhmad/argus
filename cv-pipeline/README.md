@@ -1,73 +1,76 @@
-# `cv-pipeline/` — edge AI
+# `cv-pipeline/` — CV–Perception
 
-**Video in, `Observation`s out.** Runs unmodified on Jetson Orin, Raspberry Pi 5 + Hailo-8L,
-an Android phone, or a dev laptop, from one ONNX file.
+**Footage in, one ONNX file out.** Datasets, labelling, training, export, confidence
+calibration and validation. Runs on a laptop or GPU box — **not on the bus.** The bus runs the
+Android app in [`edge-app/`](../edge-app/README.md), which packs this folder's ONNX file into
+its APK.
 
 Full design: [`docs/03-cv-pipeline.md`](../docs/03-cv-pipeline.md).
 What gets detected and why: [`docs/02-detection-taxonomy.md`](../docs/02-detection-taxonomy.md).
 
 ## Two owners, one interface
 
-| Owner | Scope | Deliverable |
-|---|---|---|
-| **CV-Perception** | Datasets, labelling, training, accuracy, calibration | An ONNX file + class list + validation report |
-| **CV-Edge** | Ingest, runtime, tracking, geometry, fusion-per-pass, uplink, benchmarks | A URI in → schema-valid messages out |
+| Owner | Folder | Scope | Deliverable |
+|---|---|---|---|
+| **CV-Perception** | `cv-pipeline/` | Datasets, labelling, training, accuracy, calibration | An ONNX file + class list + validation report |
+| **CV-Edge** | `edge-app/` | Camera streaming, ingest, runtime, tracking, geometry, fusion-per-pass, uplink | An APK: camera phones stream in, schema-valid messages out of the edge phone |
 
 The interface between them is **the ONNX file and nothing else**. CV-Edge starts on a
-COCO-pretrained model in week 1 and swaps in the real one later without touching pipeline code.
+COCO-pretrained model in week 1 and swaps in the real one later without touching app code.
 
 ## Layout
 
 ```
-argus_edge/
-├── ingest/       source adapters — rtsp:// | v4l2:// | file:// | dir://
-├── runtime/      ONNX Runtime + execution-provider selection.
-│                 THE ONLY HARDWARE-AWARE CODE IN THE REPOSITORY.
-├── perception/   pre/post-processing, NMS, mask decode, confidence calibration
-├── tracking/     ByteTrack, track lifecycle, kinematics for incidents
-├── geo/          pose interpolation, IPM, map matching, error propagation
-├── fusion/       per-pass aggregation → unique counts, occupancy, inspected_for
-├── uplink/       severity-aged priority queue, SQLite spool, MQTT client
-└── config/       per-device camera calibration, camera policy, thresholds
+cv-pipeline/
+├── models/       model cards + export scripts. Weights live in releases, not git.
+├── scripts/      train, export-onnx, calibrate-confidence, label-assist
+├── reference/    Python reference pre/post-processing (NMS, mask decode, calibration).
+│                 Produces the golden frames the edge app's tests must match.
+├── benchmarks/   report generator for the phone measurements → docs/11
+└── tests/        export checks, quantisation delta, calibration report
 ```
 
 ## Run it
 
 ```bash
-uv sync
+uv sync --extra train
 
-uv run argus-edge \
-  --source ./data/bengaluru-orr-morning.mp4 \
-  --calib  ./argus_edge/config/rig-phone-1.4m.yaml \
-  --device-id BLR-DEMO-01 --route 500D \
-  --broker mqtt://localhost:1883
+# train, export, check
+uv run python scripts/train.py --config configs/pothole-seg.yaml
+uv run python scripts/export_onnx.py --weights runs/pothole-seg/best.pt --imgsz 960 544
+uv run pytest                       # export checks, quantisation delta, calibration
 
-# swap hardware by swapping ONE flag
---ep tensorrt-int8 | hailo-int8 | nnapi-int8 | onnxrt-cuda | onnxrt-cpu
-
-# write a replay log instead of publishing (this is how the demo fallback is produced)
---sink file://./out/bengaluru-orr.jsonl
+# hand the model to CV-Edge
+cp models/argus-road-defect-<ver>.onnx ../edge-app/app/src/main/assets/
 ```
 
 ## Non-negotiables
 
-1. **The edge never emits a `missing_*` class.** You cannot bound-box an absence. Absence is a
+1. **The model never emits a `missing_*` class.** You cannot bound-box an absence. Absence is a
    backend conclusion drawn from `SegmentPass.inspection`.
-2. **Faces are blurred before any frame touches disk.** Not at the server, not at display time.
+2. **Exports must run on ONNX Runtime Android** (NNAPI and CPU). Check operator support at
+   export, not when the app crashes on a phone.
 3. **Physical quantities in metres, never pixels.** Pixel areas aren't fusable across passes.
 4. **Confidence is calibrated.** Log-odds fusion downstream is only valid on calibrated scores;
    every released model ships a reliability diagram.
-5. **Distance-gated sampling, not time-gated.** A stopped bus infers nothing; a fast bus doesn't
-   skip road.
-6. **Never block on the network.** Every uplink is fire-and-forget into the local spool.
+5. **One portable artefact.** No phone-specific retraining, so the post-MVP dedicated-board
+   comparison ([`docs/11`](../docs/11-hardware-benchmark.md)) measures the same model.
 
-## Gates before merge
+## Gates before handing a model to CV-Edge
 
-- Golden-frame regression (catches silent post-processing drift)
-- Geometry unit tests — synthetic camera, planted ground truth, assert IPM recovers it
-- Schema conformance against `contracts/`
+- Golden frames regenerated from `reference/` for the new model version
 - INT8 mAP within 2 points of FP32
 - Calibration report (reliability diagram + ECE)
+- Loads and runs in ONNX Runtime Android on the edge phone
+
+## Where our own frames come from
+
+The edge app's **Record training frames** mode ([`docs/03`](../docs/03-cv-pipeline.md#dataset-capture))
+produces one folder per drive: clean 1080p frames every 10 m from every camera, a manifest with
+GNSS and conditions, and the prototype's boxes as YOLO pre-labels. Import frames + pre-labels
+into CVAT, correct them, and keep the per-drive folder name (it carries the route) through to
+the split. Frames are stored as captured: face blurring is deferred and must be done before
+labelling or sharing ([`docs/08`](../docs/08-privacy-and-compliance.md#face-blurring-deferred)).
 
 ## Dataset discipline
 

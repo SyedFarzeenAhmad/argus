@@ -28,22 +28,18 @@ did you retain that?"
 
 ## Seven design decisions
 
-### 1. Faces are blurred on-device, before storage
+<a id="face-blurring-deferred"></a>
+### 1. Face blurring — deferred, to be done later
 
-Not at the server. Not at display time. A face detector runs on every crop destined for the
-disk, and blurring happens **before the frame is written or queued**.
+> **Decision 2026-09-25.** Face blurring is **not part of the MVP**. We will design and build it
+> later, when it is time — most likely in the backend, before any frame is labelled, shared or
+> shown. Until then the phones store frames exactly as captured, and every mention of blurring
+> elsewhere in these docs is on hold until this section is updated.
 
-```
-  frame ──▶ detect ──▶ crop ──▶ ┌──────────────┐ ──▶ disk ──▶ queue ──▶ uplink
-                                │ PRIVACY GATE │
-                                │ face blur    │
-                                └──────────────┘
-                      unblurred pixels never exist outside RAM
-```
-
-`Evidence.faces_blurred` rides in the message, and **ingest rejects any evidence containing
-people with that flag unset**, flagging the device. The guarantee is enforced at the boundary
-rather than trusted from the edge.
+What stays true meanwhile: frames never leave the bus over cellular, camera phones store
+nothing, and the processing client's frames stay on that phone until someone pulls them
+deliberately. When blurring is designed, it needs to cover everything already captured:
+`processed/pothole/` crops and frames, and the `dataset/` training frames.
 
 ### 2. We do not build the capabilities we do not need
 
@@ -70,7 +66,7 @@ not to should be able to prove it didn't.
 
 ### 4. The cabin camera does one thing
 
-Occupancy count. That is all. At 0.2 Hz, faces blurred before anything is stored, no crop of an
+Not fitted in the MVP (front + rear only). When it is: occupancy count. That is all. At 0.2 Hz, face blurring as in [section 1](#face-blurring-deferred) once it exists, no crop of an
 individual passenger ever retained. Occupancy feeds the passenger-hours-lost metric in
 [`docs/07`](07-analytics-methods.md#congestion), which is a genuinely useful planning input and
 requires nothing but a number.
@@ -109,8 +105,8 @@ rather than assumed.
 The strongest privacy property of this system is a consequence of the bandwidth design rather
 than a separate feature:
 
-> **Video does not leave the bus.** Roughly 86 GB of footage per bus per day is processed and
-> discarded on board. About 12.5 MB of findings leaves.
+> **Video does not leave the bus.** Roughly 43 GB of footage per bus per day from two cameras
+> is processed and discarded on board. About 12.5 MB of findings leaves.
 
 There is no central archive of everything every bus saw, because there is no link that could
 carry it and no storage that could hold it. The thing that makes the system affordable is the
@@ -125,11 +121,12 @@ Naming these is part of the design being credible.
 
 | Risk | Mitigation | Residual |
 |---|---|---|
-| Blur failure on an undetected face | Conservative detector, low threshold, crop-level review on `rejected` | Non-zero; a missed face in a 90-day-retention crop |
+| Faces in stored frames | Face blurring is deferred ([section 1](#face-blurring-deferred)); frames stay on the processing phone until pulled deliberately | **Open** until blurring is built |
 | Plate visible incidentally in a defect crop | Crops are tight to the defect and ground-facing; plates are rarely in frame | Low |
 | Re-identification by inference from patterns | We store no track identity beyond a segment pass | Low |
 | Mission creep by a future operator | Capabilities absent from the codebase, not merely disabled by config | Requires new development, which is the point |
-| Device physical compromise in a depot | Per-device certificates, revocable individually; no shared secrets | Bounded to one bus |
+| Device physical compromise in a depot | Per-device certificates in the edge phone's Android Keystore, revocable individually; no shared secrets | Bounded to one bus |
+| A phone is lifted off the bus | Camera phones hold no footage and no credentials; the edge phone's spool is encrypted and its certificate revocable | Bounded to that phone's unsent findings |
 
 That last row is why device identity is a certificate rather than an API key. A bus is a box
 parked overnight in a place many people can reach.
@@ -139,8 +136,7 @@ parked overnight in a place many people can reach.
 ## What to say if a judge asks
 
 > *"Every camera stays on the bus. What leaves is a finding — a pothole at these coordinates,
-> this confident, with one photograph of the road surface, faces already blurred before that
-> photograph was written to disk. We do not run face recognition. We do not read the plate of
+> this confident, with one photograph of the road surface. We do not run face recognition. We do not read the plate of
 > every vehicle we pass; we read one plate, of one vehicle, in one detected incident, and we log
-> that we did. Of 86 gigabytes a bus sees in a day, about 12 megabytes leaves it — and that's
+> that we did. Of 43 gigabytes a bus sees in a day, about 12 megabytes leaves it — and that's
 > not a privacy feature we added, it's the same decision that makes the system affordable."*

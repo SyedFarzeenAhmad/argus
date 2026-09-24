@@ -14,8 +14,9 @@ python ops/replay/replay.py --log ops/replay/logs/bengaluru-mgroad.jsonl --speed
 ```
 
 Reads a recorded `.jsonl` of real `Observation` / `SegmentPass` / `Incident` / `Telemetry`
-messages and publishes them to MQTT at wall-clock speed. Produce a log with the edge pipeline's
-`--sink file://` flag.
+messages and publishes them to MQTT at wall-clock speed. Produce a log from the edge app:
+Settings → *Record messages to file* on the edge phone, then
+`adb pull /sdcard/argus/logs/ ops/replay/logs/`.
 
 **It does three jobs, and it is maintained for all ten weeks — not abandoned after week 2:**
 

@@ -32,10 +32,21 @@ uv run python -m argus_api.seeds.load_gtfs  --source bmtc
 
 uv run fastapi dev argus_api/main.py          # :8000
 uv run python -m argus_api.ingest.worker      # MQTT → DB
+uv run python -m argus_api.ingest.edge_pull   # phone MVP: pull new processed/ records from edge phones → DB
 uv run python -m argus_api.fusion.worker      # observations → assets
 ```
 
 No CV yet? `python ../ops/replay/replay.py --log <file>.jsonl` publishes real messages.
+
+## Your first task for the phone MVP: consume `processed/`
+
+The edge app does not push yet. Each processing-client phone writes contract-format
+`Observation` / `Telemetry` JSON (+ evidence JPEGs) into `processed/<category>/` and serves it
+over a **read-only** API at `http://<phone-ip>:8080/api/v1/processed` with a bearer token.
+Write `argus_api/ingest/edge_pull.py` to pull **new** files with the `after=` cursor, validate,
+verify the evidence hash, store them through the normal ingest path, and advance a
+per-device, per-category cursor in the same commit. **Nothing is deleted on the phone.** Full
+spec: [`docs/04` → Consuming the processing client](../docs/04-backend.md#edge-processed-consumer).
 
 ## The two populations — do not conflate them
 
@@ -69,7 +80,7 @@ Use property-based tests (Hypothesis). The invariants must hold for *any* observ
 ## Non-negotiables
 
 1. **Ingest interprets nothing.** Validate, verify, store, notify. Boring on purpose.
-2. **Reject unblurred evidence at the boundary.** Don't trust the edge's flag — enforce it.
+2. **Face blurring is deferred** ([`docs/08`](../docs/08-privacy-and-compliance.md#face-blurring-deferred)). When it is built it most likely lands here, before anything is labelled or shown.
 3. **Rate numerators and denominators stay separate columns.** Pre-divided rates cannot be
    re-aggregated correctly across segments or wards.
 4. **`stale` is a real state.** Silence about a road nobody drove is not "no defects".

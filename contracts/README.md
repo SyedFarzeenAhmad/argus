@@ -9,13 +9,14 @@ fails CI rather than failing in November.
 
 ```
                     ┌──────────────────────────┐
-  cv-pipeline/ ───▶ │  contracts/schemas/*.json│ ◀─── frontend/
+  edge-app/ ──────▶ │  contracts/schemas/*.json│ ◀─── frontend/
    (produces)       │   THE SOURCE OF TRUTH    │      (consumes)
                     └────────────┬─────────────┘
                                  │  generated
                     ┌────────────┴─────────────┐
                     │ python/  argus_contracts │ ◀─── backend/
                     │ ts/      @argus/contracts│      (both)
+                    │ kotlin/  argus.contracts │ ◀─── edge-app/
                     └──────────────────────────┘
 ```
 
@@ -51,9 +52,12 @@ python contracts/generate.py --lang python --out contracts/python/argus_contract
 
 # TypeScript
 node contracts/generate.mjs --out contracts/ts/src
+
+# Kotlin (kotlinx.serialization) — for edge-app/
+node contracts/generate.mjs --lang kotlin --out contracts/kotlin/argus/contracts
 ```
 
-Both are wired into CI. A PR that edits `schemas/` without regenerating fails.
+All three are wired into CI. A PR that edits `schemas/` without regenerating fails.
 
 ## Versioning
 
@@ -63,6 +67,8 @@ Both are wired into CI. A PR that edits `schemas/` without regenerating fails.
 - **Minor** — a new optional field. Consumers ignore what they don't know.
 - **Major** — a removed or retyped field, or a new required one. Consumers **must** reject
   a major they don't recognise rather than silently mis-parse it.
+
+**1.1.0 (2026-09-25):** `Observation.subclass` (optional) — the crack type for `damaged_road`.
 
 During the build, stay on `1.x`. If you find yourself wanting a major bump before December,
 that's a signal the model was wrong — raise it with the team rather than versioning around it.
