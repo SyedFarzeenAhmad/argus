@@ -138,8 +138,10 @@ cd mock_frontend && npm install && npm run build && npm run preview   # :4173
 
 ## Status
 
-Pre-implementation. This repository currently holds the **design of record** and the
-contracts; the service folders are scaffolded and empty. Everything asserted in
+The **design of record** and the contracts, plus the first working component: the edge app
+([`edge-app/`](edge-app/README.md), APK in `edge-app/release/`) — camera phones stream to a
+processing phone that detects potholes and hands contract-format findings to the backend. The
+backend, frontend and CV-Perception folders are scaffolded. Everything asserted in
 `docs/` is a commitment to build, not a description of built software — see
 [`docs/10`](docs/10-video-claims-matrix.md), which exists specifically so the submission
 video never claims more than this table supports.

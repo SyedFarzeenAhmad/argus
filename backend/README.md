@@ -32,10 +32,20 @@ uv run python -m argus_api.seeds.load_gtfs  --source bmtc
 
 uv run fastapi dev argus_api/main.py          # :8000
 uv run python -m argus_api.ingest.worker      # MQTT → DB
+uv run python -m argus_api.ingest.edge_pull   # phone MVP: pull helpful/ from edge phones → DB, then DELETE
 uv run python -m argus_api.fusion.worker      # observations → assets
 ```
 
 No CV yet? `python ../ops/replay/replay.py --log <file>.jsonl` publishes real messages.
+
+## Your first task for the phone MVP: consume `helpful/`
+
+The edge app does not push yet. Each processing-client phone writes contract-format
+`Observation` / `Telemetry` JSON (+ evidence JPEGs) into its `helpful/` folder and serves it
+over `http://<phone-ip>:8080/api/v1/helpful` with a bearer token. Write
+`argus_api/ingest/edge_pull.py` to pull those files, validate, verify the evidence hash, store
+them through the normal ingest path, and **DELETE each file only after the DB commit**. Full
+spec: [`docs/04` → Consuming the edge phone's helpful folder](../docs/04-backend.md#edge-helpful-consumer).
 
 ## The two populations — do not conflate them
 

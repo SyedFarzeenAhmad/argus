@@ -87,6 +87,16 @@ latency is 100–300 ms; at 60 km/h, using arrival time would misplace every det
 NTP-style offset handshake with it on connect and every 30 s, and every frame carries its
 capture timestamp through RTP/RTCP sender reports mapped through that offset. Target: ≤ 20 ms.
 
+**As built in v0.1.0** ([`edge-app/`](../edge-app/README.md)). The app calls the edge phone the
+**processing client**. The MVP transport is **JPEG frames over one TCP connection per camera**
+(port 7070), not H.264/RTSP: no codec negotiation, trivially decodable, and ~10 fps of 720p
+JPEG is ~2 Mbps — well inside local Wi-Fi. The same connection carries the clock-sync
+ping/pong and a per-frame ACK: a camera keeps at most two frames in flight and drops older
+ones, so a busy processing client gets fewer, *fresh* frames instead of a growing backlog
+(measured on emulators: latency stayed ~100 ms under load instead of climbing to 3 s).
+Discovery is mDNS (`_argus._tcp`) with a typed-address fallback. H.264/RTSP remains the
+upgrade path if bandwidth or frame rate demands it.
+
 **Candidate libraries** (licence-checked in week 1, same discipline as the models): CameraX +
 MediaCodec for capture and encode, an RTSP server library on the camera side (e.g.
 RootEncoder), AndroidX Media3's RTSP client on the edge side, ONNX Runtime Android, and an
@@ -533,25 +543,23 @@ edge-app/                    CV–Edge: Kotlin Android app, one APK, two roles
 
 ## Running it
 
-Install `edge-app/release/argus-edge-<version>.apk` on all three phones.
+Install `edge-app/release/argus-edge-<version>.apk` on every phone (full guide:
+[`edge-app/README.md`](../edge-app/README.md)).
 
-1. **Edge phone:** open ARGUS → *Edge* mode. It starts the local hotspot, shows its SSID, and
-   waits for cameras. Set `device_id`, bus and route once in settings.
-2. **Each camera phone:** join that hotspot → ARGUS → *Camera* mode → pick `front` or `rear`.
-   It announces itself; the edge phone shows both streams, their FPS and clock offset.
-3. **Calibrate** each camera once per mounting (a printed checkerboard on the road, guided in
-   the app). Calibration is stored per `camera_id`.
-4. Edge phone → **Start**. Findings flow to the broker configured in settings
-   (`mqtts://…` in the field, `mqtt://<laptop-ip>:1883` for development).
+1. All phones on one network — the processing phone's hotspot or the bus Wi-Fi.
+2. **Processing phone:** ARGUS → *Processing client*. Set device, bus and route in settings.
+3. **Each camera phone:** ARGUS → *Camera* → pick its position → tap the processing client (or
+   type its address). It re-links by itself after a reboot.
+4. **Processing phone → ▶.** Potholes are written to `processed/` (full record) and, when there
+   is a GPS fix, to `helpful/` (contract messages the backend pulls and deletes —
+   [`docs/04`](04-backend.md#edge-helpful-consumer)).
 
-**Demo path — no bus required.** In Edge mode, point a camera at a file instead of a phone:
-`file:///sdcard/argus/bengaluru-orr-morning.mp4` (with its GNSS track alongside). Same code,
-same models, real MQTT.
+**Demo path — no bus required.** *Test video* on the processing screen plays a video file as
+one more linked camera. Same frame path, same models. Sampling is distance-gated (5 m); the
+*Every 0.5 s (test)* switch exists for bench tests without movement.
 
-**Replay log.** Settings → *Record messages to file* writes every outgoing message to a
-`.jsonl` on the phone as well as publishing it. Pull it with `adb pull` into
-`ops/replay/logs/`; that is how the demo-day fallback log is produced — the same run, same
-code, output to a file as well as a broker.
+**Replay log.** `helpful/` already holds contract-format messages; `adb pull` it (or pull
+through the local API) into `ops/replay/logs/` to build the demo-day fallback log.
 
 ## Validation gates
 

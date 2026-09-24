@@ -44,6 +44,13 @@ This week has one job beyond the video: make it impossible for anyone to be bloc
 | Frontend | `bake-bangalore.mjs` producing real OSM geometry; mock frontend re-skinned onto it | Real Bengaluru roads render in the 3D view at 60 fps **on the presentation machine** |
 | **All** | Video script from [`docs/10`](10-video-claims-matrix.md) | Every claim traced to a row in that table |
 
+**Status 2026-09-25 — CV-Edge week-1 row done, and more:** the edge app v0.1.0 has camera and
+processing roles, N-camera streaming with clock sync, on-device pothole detection (prototype
+model), distance gating, face blur, `processed/` + `helpful/` folders and the local API. The
+backend's first task follows from it: the `helpful/` consumer
+([`docs/04`](04-backend.md#edge-helpful-consumer)). Still owed by CV-Edge for the slice: IPM +
+calibration (so `geo` is the pothole, not the bus) and the MQTT uplink.
+
 ### The week-1 trap to avoid
 
 Do not spend this week training a good model. Spend it making a **bad** model flow through the

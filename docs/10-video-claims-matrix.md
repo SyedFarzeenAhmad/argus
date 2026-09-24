@@ -48,7 +48,8 @@ every phrasing one tier down.
 | # | Claim | Tier | Evidence |
 |---|---|---|---|
 | E1 | Runs on-device; video never leaves the bus | **COMMITTED** | Architecture + live run. Video crosses only the bus's local Wi-Fi, camera phone → edge phone. |
-| E1a | Runs on off-the-shelf Android phones: front + rear camera phones streaming to one edge phone; camera count is configurable | **COMMITTED** | The three phones running the APK |
+| E1a | Runs on off-the-shelf Android phones: front + rear camera phones streaming to one processing phone; camera count is configurable | **BUILT** (v0.1.0, verified on emulators — confirm on real phones before filming) | `edge-app/release/argus-edge-0.1.0.apk` |
+| E1b | Detects potholes on-device and hands contract-format findings to the backend | **BUILT** (prototype model) | Say "prototype model"; its accuracy on Bengaluru roads is **not** measured yet — quote no accuracy figure |
 | E2 | **~12.5 MB/bus/day vs ~43 GB of raw video from our two cameras — a ~3,500× reduction** (~6,900× against a four-camera fit-out) | **BUILT** (arithmetic) | The table in [`docs/03`](03-cv-pipeline.md#bandwidth-budget). Safe now; it's arithmetic. |
 | E3 | One portable ONNX model — the same file can move to dedicated hardware without retraining | **COMMITTED** | The APK's model file; export pipeline |
 | E4 | Phone setup measured under windscreen heat: FPS, temperature, battery | **COMMITTED** | Part 1 of [`docs/11`](11-hardware-benchmark.md) |
@@ -168,4 +169,5 @@ about a demo.
 | Date | Change |
 |---|---|
 | 2026-09-22 | Created. All tiers assigned from the design. Nothing BUILT except the mock frontend and the bandwidth arithmetic. |
+| 2026-09-25 | Edge app v0.1.0: camera + processing roles, streaming, pothole detection (prototype YOLO11n), processed/ + helpful/ folders, local API. E1a, E1b → BUILT. Pothole *geo* is still the bus position (no IPM yet). |
 | 2026-09-25 | D11: edge moves to Android phones (2 camera phones → 1 edge phone). E1a added. E2 recomputed for two cameras. E3/E4 re-scoped to the phone; dedicated-board comparison moved to E4a, ROADMAP (PPT next step). |
