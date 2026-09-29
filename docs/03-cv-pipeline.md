@@ -1,25 +1,106 @@
-# 03 — The CV pipeline (`cv-pipeline/`)
+# 03 — The CV pipeline (`cv-pipeline/` + `edge-app/`)
 
-**Owners:** CV–Perception (models, accuracy) and CV–Edge (runtime, geometry, uplink).
+**Owners:** CV–Perception (models, accuracy — `cv-pipeline/`) and CV–Edge (the Android app:
+streaming, runtime, geometry, uplink — `edge-app/`).
 **Interface between them:** one ONNX file and a class list. Nothing else.
+
+> **Decision 2026-09-25 (D11 in the design of record).** The edge runs on **off-the-shelf
+> Android phones**, not a dedicated board. Two camera phones (front, rear) stream video over
+> the bus's local Wi-Fi to one edge phone, which runs every model and uplinks findings to the
+> servers. Dedicated boards (Jetson, Pi + Hailo) are deferred until the phone MVP works; see
+> [`docs/11`](11-hardware-benchmark.md).
 
 ---
 
 ## Design constraints, in priority order
 
-1. **One model artefact, three hardware targets.** The deployment board is not chosen yet
-   and choosing it is a *result*, not an input. So the pipeline must run unmodified on
-   Jetson Orin, Raspberry Pi 5 + Hailo-8L, and an Android phone, from a single ONNX export.
-2. **Input is a URI, never a device.** `rtsp://`, `/dev/video0` and `./bengaluru.mp4` go
-   through the identical path. This is what makes the demo honest — the video file exercises
-   production code, not a special case.
-3. **Findings leave the bus; footage does not.** Except one narrow, deliberate exception
-   (incident clips over depot wifi).
-4. **Never block on the network.** Cellular in a moving bus drops constantly. Every uplink is
-   fire-and-forget into a local spool.
-5. **Degrade visibly, not silently.** A throttled SoC or a fogged lens must show up in
-   telemetry. The realistic failure of a 6,400-unit fleet is not a crash — it's a bus that
-   quietly stops contributing and nobody notices for three weeks.
+1. **One model artefact, phones now, other hardware later.** The MVP runs on an Android edge
+   phone. The model still ships as a single portable ONNX export, so that the dedicated-board
+   comparison we will present after the MVP ([`docs/11`](11-hardware-benchmark.md)) measures
+   the same model rather than a re-trained one.
+2. **Input is a URI, never a device.** `rtsp://front-cam.local:8554/live` (a camera phone) and
+   `file:///sdcard/argus/bengaluru.mp4` (recorded footage) go through the identical path. This
+   is what makes the demo honest — the video file exercises production code, not a special
+   case. It is also what makes the camera count **N, not 2**: a camera is a URI in config.
+3. **Findings leave the bus; footage does not.** Video travels only over the bus's own local
+   Wi-Fi, camera phone → edge phone, and never over cellular. One narrow, deliberate exception:
+   incident clips, over depot wifi.
+4. **Never block on the network.** Cellular in a moving bus drops constantly, and a camera
+   phone's stream can drop too. Every uplink is fire-and-forget into a local spool, and a lost
+   camera stream degrades the pass (it shows in `inspected_for` and telemetry) rather than
+   stopping the edge.
+5. **Degrade visibly, not silently.** A throttled phone, a camera phone that lost its stream or
+   a fogged lens must show up in telemetry. The realistic failure of a 6,400-unit fleet is not
+   a crash — it's a bus that quietly stops contributing and nobody notices for three weeks.
+
+---
+
+<a id="on-bus-topology"></a>
+## On the bus — three phones
+
+```
+   ┌──────────────────┐                        ┌──────────────────┐
+   │ FRONT CAMERA     │                        │ REAR CAMERA      │
+   │ phone            │                        │ phone            │
+   │ windscreen mount │                        │ rear window mount│
+   │ CameraX → H.264  │                        │ CameraX → H.264  │
+   │ (hardware enc.)  │                        │ (hardware enc.)  │
+   │ → RTSP server    │                        │ → RTSP server    │
+   └────────┬─────────┘                        └─────────┬────────┘
+            │  ~3 Mbps                         ~3 Mbps   │
+            │  local Wi-Fi only (WPA2/3, no internet)    │
+            └──────────────────┐        ┌────────────────┘
+                               ▼        ▼
+                   ┌──────────────────────────────────┐
+                   │ EDGE phone  (hosts the hotspot)  │
+                   │  RTSP client ×N → decode         │
+                   │  own GNSS + IMU = the bus's pose │
+                   │  ONNX Runtime: every model       │
+                   │  track · geo · privacy · queue   │
+                   └────────────────┬─────────────────┘
+                                    │  MQTT / TLS 1.3 over 4G/5G
+                                    ▼  ~12.5 MB per bus per day
+                              central platform
+```
+
+**One APK, two roles.** The same app is installed on all three phones and started in either
+**Camera** or **Edge** mode. Camera mode does nothing but capture, hardware-encode and serve
+one stream — so camera phones can be cheap, old handsets. Edge mode is where all the compute
+lives, so the edge phone should be a mid-to-upper-range handset with an NPU.
+
+| | Camera phone (× N, MVP N = 2) | Edge phone (× 1) |
+|---|---|---|
+| Runs | Capture → H.264 encode → RTSP server | RTSP ingest, all models, tracking, geo, privacy gate, uplink |
+| Sensors used | Camera only | **GNSS + IMU** (it *is* the bus's pose sensor), cellular modem |
+| Mounting | Front windscreen / rear window, fixed pitch, measured height | **Rigidly** fixed to the bus body (so its IMU measures the bus, not a wobbling holder), sky view for GNSS, shaded |
+| Power | USB-C from the bus 12 V supply | USB-C from the bus 12 V supply |
+| Identity in `contracts/` | A `camera_id` (`front`, `rear`) | The `device_id`. One edge phone = one device, so fusion's "distinct devices" still means distinct buses |
+
+**The local network.** The edge phone hosts a WPA2/WPA3 hotspot that only the camera phones
+join, and shares its cellular link with no one. Two 1080p streams need ~6 Mbps; phone Wi-Fi
+sustains many times that, so the local link is not the bottleneck — edge-phone compute is.
+
+**Time sync across phones — the easy-to-miss part.** Geo-referencing interpolates the edge
+phone's GNSS/IMU to the moment a frame was *captured*, not the moment it *arrived*. Stream
+latency is 100–300 ms; at 60 km/h, using arrival time would misplace every detection by up to
+5 m. So the edge phone is the time master (GNSS-disciplined), each camera phone runs an
+NTP-style offset handshake with it on connect and every 30 s, and every frame carries its
+capture timestamp through RTP/RTCP sender reports mapped through that offset. Target: ≤ 20 ms.
+
+**As built in v0.1.0** ([`edge-app/`](../edge-app/README.md)). The app calls the edge phone the
+**processing client**. The MVP transport is **JPEG frames over one TCP connection per camera**
+(port 7070), not H.264/RTSP: no codec negotiation, trivially decodable, and ~10 fps of 720p
+JPEG is ~2 Mbps — well inside local Wi-Fi. The same connection carries the clock-sync
+ping/pong and a per-frame ACK: a camera keeps at most two frames in flight and drops older
+ones, so a busy processing client gets fewer, *fresh* frames instead of a growing backlog
+(measured on emulators: latency stayed ~100 ms under load instead of climbing to 3 s).
+Discovery is mDNS (`_argus._tcp`) with a typed-address fallback. H.264/RTSP remains the
+upgrade path if bandwidth or frame rate demands it.
+
+**Candidate libraries** (licence-checked in week 1, same discipline as the models): CameraX +
+MediaCodec for capture and encode, an RTSP server library on the camera side (e.g.
+RootEncoder), AndroidX Media3's RTSP client on the edge side, ONNX Runtime Android, and an
+MQTT client (e.g. HiveMQ MQTT Client). Kotlin throughout.
 
 ---
 
@@ -30,30 +111,32 @@
              │   argus-road-defect-v0.4.2.onnx    │   ← ONE artefact
              └─────────────────┬──────────────────┘
                                │
-        ┌──────────────┬───────┴────────┬──────────────────┐
-        ▼              ▼                ▼                  ▼
-  TensorRT EP     HailoRT           NNAPI EP          CUDA / CPU EP
-  (Orin, INT8)  (Pi 5 + Hailo-8L)  (Android, INT8)   (dev laptop)
-        │              │                │                  │
-        └──────────────┴────────┬───────┴──────────────────┘
-                                ▼
-                     identical Observation output
+        ┌──────────────────────┼─────────────────────────────────┐
+        ▼                      ▼                                  ▼
+   NNAPI EP              CPU EP (XNNPACK)              later, same file:
+   (edge phone NPU,      (fallback on phones           TensorRT (Orin),
+    INT8)                 without a usable NPU)         HailoRT (Pi + Hailo)
+        │                      │                       — docs/11, after MVP
+        └──────────┬───────────┘
+                   ▼
+        identical Observation output
 ```
 
-`argus_edge/runtime/` exposes exactly one function — `infer(frames) -> Detections` — and the
-execution provider is selected from config at startup. **No perception code anywhere else in
-the repository knows which board it is running on.**
+`edge-app/.../runtime/` exposes exactly one function — `infer(frames) -> Detections` — and the
+execution provider is selected from config at startup, with a CPU fallback if the NPU path
+fails to load. **No perception code anywhere else in the repository knows which chip it is
+running on.**
 
-This is the constraint that makes the benchmark in [`docs/11`](11-hardware-benchmark.md)
-meaningful. If any target needed its own retrained model, the comparison would be between
-three different systems rather than one system on three boards, and the resulting
-cost-per-bus table would be worthless.
+The laptop is not an edge target any more. It is where CV–Perception trains, exports and
+evaluates, and where the Python reference post-processing produces the golden frames the app
+is tested against (see [Validation gates](#validation-gates)).
 
 ### Why ONNX rather than each vendor's native path
 
-Vendor toolchains give maybe 10–20% more throughput. They also fork your model three ways,
-triple your validation matrix, and make "which board should the government buy" unanswerable.
-For a 10-week project with two CV people, portability is worth more than the last 15%.
+Vendor toolchains give maybe 10–20% more throughput. They also fork your model per chip,
+multiply your validation matrix, and make the post-MVP question "which dedicated board, if
+any, should the government buy" unanswerable. For a 10-week project with two CV people,
+portability is worth more than the last 15%.
 
 <a id="model-licensing"></a>
 ## Model licensing — decide this in week 1, not week 9
@@ -159,19 +242,27 @@ every 5 m" is a statement about survey quality; "this segment was sampled at 2 H
 <a id="multi-camera-policy"></a>
 ## Multi-camera policy
 
-The brief says front, rear, sides and cabin. Running four full pipelines is neither necessary
-nor affordable.
+The brief says front, rear, sides and cabin. The architecture takes **N camera phones** — each
+is one RTSP URI in the edge phone's config — but the MVP fits **two**, and every camera is
+paid for in *edge-phone* compute, because that is where every model runs.
 
-| Camera | Rate | Runs | Why |
-|---|---|---|---|
-| **Front** | full (distance-gated + 15 Hz track) | everything | The primary sensor. Road ahead, traffic, VRUs, incidents. |
-| **Rear** | 5 Hz, **escalates to full on incident** | vehicle detect, plate | The tailgater's plate is behind the bus. Idle most of the time; the incident trigger wakes it. |
-| **Left / right** | 1 Hz | encroachment, footpath, stop-area crowd | Side content changes slowly and is about static infrastructure, not events. |
-| **Cabin** | 0.2 Hz | occupancy count only, **faces blurred pre-storage** | Occupancy for load analytics. Nothing else. See [`08`](08-privacy-and-compliance.md). |
+| Camera | MVP | Rate on the edge phone | Runs | Why |
+|---|---|---|---|---|
+| **Front** | ✅ phone | full (distance-gated + 15 Hz track) | everything | The primary sensor. Road ahead, traffic, VRUs, incidents. |
+| **Rear** | ✅ phone | 5 Hz, **escalates to full on incident** | vehicle detect, plate | The tailgater's plate is behind the bus. Idle most of the time; the incident trigger wakes it. |
+| Left / right | roadmap | 1 Hz | encroachment, footpath, stop-area crowd | Side content changes slowly and is about static infrastructure, not events. |
+| Cabin | roadmap | 0.2 Hz | occupancy count only (face blurring: see docs/08) | Occupancy for load analytics. See [`08`](08-privacy-and-compliance.md). |
 
-Total cost is roughly **1.4× the front camera alone**, not 4×. Event-driven escalation is what
-buys that: the rear camera is cheap until the moment it matters, and then it is instantly
-expensive for twenty seconds.
+Camera phones always stream at their full encoded rate; the **edge phone decides what to
+decode and infer**. The rear stream is decoded at 5 Hz until an incident trigger, then at full
+rate for twenty seconds. Event-driven escalation is what makes a second camera cost well under
+2× — the rear camera is cheap until the moment it matters.
+
+**The compute budget is the tightest constraint in the MVP.** One phone decoding two streams
+and running a 15 Hz vehicle path, a distance-gated defect path and a 5 Hz rear path is a lot to
+ask, and it will get hot. It is measured, not assumed ([`docs/11`](11-hardware-benchmark.md)).
+If it doesn't fit, the levers, in order: vehicle path 15 → 10 Hz, rear idle rate 5 → 2 Hz,
+defect path to INT8 first. Adding a third camera is a config line plus a measurement.
 
 ---
 
@@ -183,7 +274,8 @@ partial occlusion behind an auto — produces exactly that population of weak de
 tracker that throws them away fragments tracks constantly.
 
 It also uses **no appearance embedding network**, which means no second model in the edge
-compute budget. On a Hailo-8L that difference decides whether the pipeline fits at all.
+compute budget. On one edge phone already decoding two streams, that difference decides whether
+the pipeline fits at all.
 
 Tracks are what make three otherwise impossible things possible:
 
@@ -275,8 +367,10 @@ Calibration error is small — a 0.5° pitch error costs ~0.3 m at 10 m range an
 **Bus body pitch under braking is several degrees**, and it is not small. A bus decelerating
 into a stop can pitch 2–3°, which at 20 m range is a 5–7 m range error. Three mitigations:
 
-1. **IMU-derived pitch correction** per frame — the accelerometer already tells us the body
-   attitude, so use it rather than assuming the calibrated value.
+1. **IMU-derived pitch correction** per frame — the edge phone's accelerometer already tells
+   us the body attitude, so use it rather than assuming the calibrated value. This only works
+   because the edge phone is **rigidly** mounted to the bus body; the camera phones are
+   calibrated relative to it once, at install.
 2. **Range gating.** Detections beyond 25 m carry reduced fusion weight; beyond 35 m they are
    dropped. Error grows roughly with range squared, so the far field is nearly worthless for
    localisation even though it's fine for *detection*.
@@ -284,8 +378,9 @@ into a stop can pitch 2–3°, which at 20 m range is a 5–7 m range error. Thr
 
 ### Map matching
 
-Raw lat/lon is snapped to the OSM road graph with an HMM map-matcher (Valhalla Meili, or our
-own Viterbi over candidate segments). This yields `segment_id`, `offset_m` and `ward_id`.
+Raw lat/lon is snapped to the OSM road graph with an HMM map-matcher — on the phone, our own
+Viterbi over candidate segments of a Bengaluru road graph baked into the APK (the same OSM
+extent the frontend bakes; Valhalla is too heavy to embed). This yields `segment_id`, `offset_m` and `ward_id`.
 
 Map matching is not cosmetic. It is what makes **every aggregation in the platform possible** —
 per-segment congestion, ward rollups, the asset ledger, coverage statistics. Without a stable
@@ -299,7 +394,7 @@ would have nothing to group by.
 | GNSS horizontal (consumer, urban) | ±5.0 m |
 | IPM at 10–20 m, with IMU pitch correction | ±1.0 m |
 | Heading error 3° projected at 15 m | ±0.8 m |
-| Frame/GNSS time sync (interpolated, 1 Hz → frame) | ±0.3 m |
+| Frame/GNSS time sync (camera-phone capture time → edge-phone pose, ≤ 20 ms; see [topology](#on-bus-topology)) | ±0.3 m |
 | **Single observation, combined** | **≈ ±5.2 m** |
 
 After fusing N passes, error falls roughly as 1/√N — **but not indefinitely.** GNSS multipath
@@ -314,14 +409,19 @@ is the accuracy a patching crew actually needs.
 ### What raw video would cost
 
 ```
-  4 cameras × 1080p30 × H.264 @ ~3 Mbps      =  12 Mbps
-  × 16 operating hours                        =  86.4 GB per bus per day
-  × 6,400 BMTC buses                          ≈  553 TB per day
+  2 cameras (front + rear) × 1080p30 × H.264 @ ~3 Mbps   =   6 Mbps
+  × 16 operating hours                                   =  43.2 GB per bus per day
+  × 6,400 BMTC buses                                     ≈  276 TB per day
 ```
 
-Roughly 200 PB a year. There is no cellular plan, no backhaul and no storage budget in any
-municipal corporation for which that is a real option. This is *why* the problem statement
-demands edge processing, and it's worth showing the number rather than repeating the phrase.
+Roughly 100 PB a year — and that is only the MVP's two cameras. The brief's full fit-out of
+front, rear, sides and cabin roughly doubles it (4 cameras ≈ 86 GB/bus/day, ≈ 553 TB/day).
+There is no cellular plan, no backhaul and no storage budget in any municipal corporation for
+which that is a real option. This is *why* the problem statement demands edge processing, and
+it's worth showing the number rather than repeating the phrase.
+
+Those 6 Mbps do exist on the bus — but only on the local Wi-Fi between the camera phones and
+the edge phone, which costs nothing and leaves nothing behind.
 
 ### What ARGUS sends over cellular
 
@@ -334,7 +434,7 @@ demands edge processing, and it's worth showing the number rather than repeating
 | **Total over cellular** | | | **≈ 12.5 MB/bus/day** |
 | **× 6,400 buses** | | | **≈ 80 GB/day** |
 
-**Reduction factor: ~6,900×.**
+**Reduction factor: ~3,500×** against our two cameras (~6,900× against a four-camera fit-out).
 
 ### The exception, and why it's designed this way
 
@@ -343,6 +443,9 @@ A 30-second 1080p incident clip is ~11 MB. At 1–3 incidents per bus per day th
 entire budget on the rarest message type.
 
 So incident clips **spool locally and upload over depot wifi overnight**, on an unmetered link.
+The edge phone keeps a rolling 30-second buffer of each incoming stream *as received* — it is
+already H.264, so buffering costs memory, not re-encoding — and writes it, encrypted, only when
+an incident fires.
 What goes over cellular immediately is the alert itself: type, location, timestamp, plate with
 confidence, kinematic triggers, and a single plate crop. The control room is notified in
 seconds; the full evidence file arrives before the next morning's shift.
@@ -361,7 +464,7 @@ Inherited directly from the internal-round mock, which got this right:
   seven seconds a low-severity signboard outranks a freshly-found high-severity defect.
   Without this, a busy road starves the queue and low-severity findings never transmit.
 - **Incidents pre-empt entirely**, bypassing the queue.
-- **SQLite spool** on disk, so a cellular dropout or a power cycle loses nothing. `queue_depth`
+- **SQLite spool** on the edge phone's storage, so a cellular dropout or a power cycle loses nothing. `queue_depth`
   and `queue_oldest_s` ride in telemetry, making uplink health a visible fleet KPI rather than
   an invisible failure.
 
@@ -369,12 +472,9 @@ Inherited directly from the internal-round mock, which got this right:
 
 ## The privacy gate
 
-Faces are blurred **before any frame is written to disk or entered into the queue** — not at
-the server, not at display time. A lightweight face detector runs on every crop destined for
-storage, and `Evidence.faces_blurred` is set accordingly. Ingest rejects any evidence crop
-containing people with that flag unset.
-
-Full reasoning and the DPDP Act position: [`docs/08`](08-privacy-and-compliance.md).
+**Face blurring is deferred** — it will be designed and built later, when it is time (most
+likely in the backend). See [`docs/08`](08-privacy-and-compliance.md#face-blurring-deferred).
+Camera phones still store nothing, and nothing leaves the bus over cellular except findings.
 
 ---
 
@@ -391,16 +491,30 @@ Full reasoning and the DPDP Act position: [`docs/08`](08-privacy-and-compliance.
 
 ### Our own capture — the plan
 
-- **Rig:** phone or action camera, windscreen-mounted at ~1.4 m, fixed pitch, recorded with a
-  GNSS logger. Note the height difference from a real bus roof (~3 m) — the IPM calibration
-  differs and must be measured, not assumed. This is a known, documented gap between demo rig
-  and deployment geometry, not something to paper over.
+- **Rig:** the same arrangement as the product — a front phone on the windscreen at ~1.4 m and a
+  rear phone, fixed pitch, with a GNSS logger (or the edge phone recording its own GNSS + IMU).
+  Note the height difference from a real bus windscreen (~2–3 m) — the IPM calibration differs
+  and must be measured, not assumed. This is a known, documented gap between demo rig and
+  deployment geometry, not something to paper over.
 - **Routes:** 4–6 real BMTC corridors, chosen for defect variety. Outer Ring Road, Hosur Road,
   an inner-city stretch (Shivajinagar/Shantinagar), and a residential arterial.
 - **Volume:** ~3–4 hours raw, in dry and wet conditions and at least one dusk run.
 - **Labelling:** ~2,000–3,000 frames, in Label Studio or CVAT, split between both CV members.
   Distance-gated extraction means the frames are spatially spread rather than 3,000
   near-duplicates from one junction — sample at 10 m intervals.
+<a id="dataset-capture"></a>
+- **Capture tool: the edge app itself.** On the processing client, *Record training frames*
+  switches every camera phone to 1080p / light JPEG and saves a **clean frame from every camera
+  every 10 m of travel, whether or not a pothole was seen** — negatives are half of what a model
+  needs. Nothing is drawn on the frames. Per drive it writes
+  `dataset/<session>_<route>/`: `frames/<camera>/*.jpg`, `manifest.jsonl` (time, camera, GNSS,
+  speed, heading, illumination per frame), and `prelabels/<camera>/*.txt` — the prototype
+  model's boxes in YOLO format, to import into CVAT as a starting point, never as ground
+  truth. It stops itself below 1 GB free. Roughly 3,000 frames per camera per 30 km drive.
+  Pull with `adb pull /sdcard/Android/data/com.argus.edge/files/argus/dataset/`.
+- **Frames are stored as captured.** Face blurring is deferred and will be done later
+  ([`docs/08`](08-privacy-and-compliance.md#face-blurring-deferred)), before any frame is
+  labelled or shared.
 - **Split discipline:** split **by route, not by frame.** Random frame splits leak — adjacent
   frames of the same pothole land in train and test and the reported mAP becomes fiction. A
   held-out *route* is the only honest test set.
@@ -413,51 +527,59 @@ project ends up reporting a number it cannot reproduce on stage.
 ## Folder layout
 
 ```
-cv-pipeline/
-├── argus_edge/
-│   ├── ingest/        source adapters: rtsp | v4l2 | file | image-dir
-│   ├── runtime/       ONNX Runtime wrapper + EP selection. The ONLY hardware-aware code.
-│   ├── perception/    pre/post-processing, NMS, mask decode, calibration
-│   ├── tracking/      ByteTrack, track lifecycle, kinematics
-│   ├── geo/           pose interpolation, IPM, map matching, error propagation
-│   ├── fusion/        per-pass aggregation: unique counts, occupancy, inspected_for
-│   ├── uplink/        priority queue, SQLite spool, MQTT client
-│   └── config/        per-device calibration, camera policy, thresholds
-├── models/            model cards + export scripts. Weights live in releases, not git.
-├── scripts/           train, export-onnx, calibrate-camera, label-assist
-├── benchmarks/        the cross-hardware harness → docs/11
-└── tests/             golden-frame regression, geometry unit tests, schema conformance
+cv-pipeline/                 CV–Perception: Python, runs on a laptop / GPU box
+├── models/                  model cards + export scripts. Weights live in releases, not git.
+├── scripts/                 train, export-onnx, calibrate-confidence, label-assist
+├── reference/               Python reference pre/post-processing → golden frames for the app
+└── tests/                   export checks, quantisation delta, calibration report
+
+edge-app/                    CV–Edge: Kotlin Android app, one APK, two roles
+├── app/src/main/java/.../
+│   ├── camera/              CAMERA role: CameraX → MediaCodec H.264 → RTSP server, time-sync client
+│   ├── ingest/              EDGE role: source adapters — rtsp:// | file://, capture-time stamping
+│   ├── runtime/             ONNX Runtime + EP selection. The ONLY hardware-aware code.
+│   ├── perception/          pre/post-processing, NMS, mask decode, calibration
+│   ├── tracking/            ByteTrack, track lifecycle, kinematics
+│   ├── geo/                 pose interpolation, IPM, map matching over the baked road graph
+│   ├── fusion/              per-pass aggregation: unique counts, occupancy, inspected_for
+│   ├── uplink/              priority queue, SQLite spool, MQTT client
+│   └── config/              per-camera calibration, camera URIs + policy, thresholds
+├── app/src/main/assets/     the ONNX model(s) + class list + baked road graph, packed into the APK
+├── release/                 the committed, versioned APK: argus-edge-<version>.apk
+└── app/src/test/            golden-frame regression, geometry unit tests, schema conformance
 ```
 
 ## Running it
 
-```bash
-cd cv-pipeline && uv sync
+Install `edge-app/release/argus-edge-<version>.apk` on every phone (full guide:
+[`edge-app/README.md`](../edge-app/README.md)).
 
-# demo path: a video file, live inference, real MQTT
-uv run argus-edge \
-  --source ./data/bengaluru-orr-morning.mp4 \
-  --calib  ./argus_edge/config/rig-phone-1.4m.yaml \
-  --device-id BLR-DEMO-01 \
-  --route 500D \
-  --broker mqtt://localhost:1883
+1. All phones on one network — the processing phone's hotspot or the bus Wi-Fi.
+2. **Processing phone:** ARGUS → *Processing client*. Set device, bus and route in settings.
+3. **Each camera phone:** ARGUS → *Camera* → pick its position → tap the processing client (or
+   type its address). It re-links by itself after a reboot.
+4. **Processing phone → ▶.** Each pothole with a GPS fix becomes a contract `Observation` in
+   `processed/pothole/` (+ crop + frame); every inference is logged in `processed/log/`. The
+   backend reads `processed/` over a read-only API and never deletes
+   ([`docs/04`](04-backend.md#edge-processed-consumer)).
+5. **Collecting training data?** Turn on *Record training frames* — see
+   [dataset capture](#dataset-capture).
 
-# swap hardware by swapping the execution provider, nothing else
---ep tensorrt-fp16 | hailo-int8 | nnapi-int8 | onnxrt-cuda | onnxrt-cpu
+**Demo path — no bus required.** *Test video* on the processing screen plays a video file as
+one more linked camera. Same frame path, same models. Sampling is distance-gated (5 m); the
+*Every 0.5 s (test)* switch exists for bench tests without movement.
 
-# offline: write a replay log instead of publishing
---sink file://./out/bengaluru-orr.jsonl
-```
-
-That last flag is how the demo-day fallback log gets produced: the same run, same code, output
-to a file instead of a broker.
+**Replay log.** `processed/` already holds contract-format messages; `adb pull` it (or pull
+through the local API) into `ops/replay/logs/` to build the demo-day fallback log.
 
 ## Validation gates
 
 Nothing merges to `main` without:
 
-- **Golden-frame regression** — a fixed set of frames with known expected outputs. Catches a
-  post-processing change that silently shifts every mask by two pixels.
+- **Golden-frame regression** — a fixed set of frames with known expected outputs, produced by
+  `cv-pipeline/reference/` and asserted by the app's tests. Catches a post-processing change —
+  or a Kotlin port that disagrees with the Python the model was trained against — that silently
+  shifts every mask by two pixels.
 - **Geometry unit tests** — synthetic camera, known ground truth, assert IPM recovers the
   planted position within tolerance. Geometry bugs are invisible in a demo and fatal in a map.
 - **Schema conformance** — every emitted message validated against `contracts/`.

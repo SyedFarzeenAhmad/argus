@@ -98,7 +98,8 @@ Ranking by CI alone promotes empty, slow lanes. Rank by delay actually suffered:
 
 A corridor costing 400 passenger-hours a day outranks a worse-CI lane costing 12. This is the
 metric a transport authority allocates budget against, and the fleet measures every term of it
-directly — including occupancy, from the cabin camera.
+directly — including occupancy, from the cabin camera once one is fitted (roadmap; until then,
+from ticketing data or a fixed per-route assumption, stated as such).
 
 ### Aggregation and serving
 
@@ -208,7 +209,7 @@ arrival*, *morning peak*, *midday*, *evening peak*, *night*.
   side of a divided road are not observed.
 - Strongly **biased to bus corridors**. The coverage layer is on by default for this reason.
 - Sampled at pass times, so a crowd that assembles and disperses between two buses is missed.
-- **Never identity, never demographics.** Counts and trajectories only; faces blurred on-device
+- **Never identity, never demographics.** Counts and trajectories only; face blurring deferred (docs/08)
   before storage. See [`docs/08`](08-privacy-and-compliance.md).
 
 ---

@@ -5,10 +5,16 @@
 ```
 ╔═══════════════════ ON THE BUS (× 6,400) ═══════════════════╗
 ║                                                             ║
-║  front  rear  left  right  cabin      GNSS 1Hz   IMU 100Hz  ║
-║    │      │     │     │      │          │          │        ║
-║    └──────┴──┬──┴─────┴──────┘          └────┬─────┘        ║
-║              ▼                                ▼             ║
+║  CAMERA PHONES   (MVP: front + rear; N by config)           ║
+║    front phone ──┐   H.264 / RTSP over the bus's own        ║
+║    rear phone  ──┤   local Wi-Fi hotspot, no internet       ║
+║  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄  ║
+║  EDGE PHONE      │                   GNSS 1Hz   IMU 100Hz   ║
+║                  ▼                   (edge phone's own)     ║
+║      RTSP ingest ×N, frames             │          │        ║
+║      stamped at CAPTURE time            └────┬─────┘        ║
+║              │                               │              ║
+║              ▼                               ▼              ║
 ║      ┌───────────────┐              ┌──────────────────┐    ║
 ║      │ FRAME GATE    │              │ POSE ESTIMATOR   │    ║
 ║      │ distance-     │              │ interpolate GNSS │    ║
@@ -39,8 +45,8 @@
 ║      └───────────────┬──────────────────────────────┘        ║
 ║                      ▼                                        ║
 ║      ┌──────────────────────────────────────────────┐        ║
-║      │ PRIVACY GATE  — faces blurred BEFORE any      │        ║
-║      │ frame is written to disk or queued            │        ║
+║      │ PRIVACY GATE  — face blurring DEFERRED        │        ║
+║      │ (docs/08) — to be built later                 │        ║
 ║      └───────────────┬──────────────────────────────┘        ║
 ║                      ▼                                        ║
 ║      ┌──────────────────────────────────────────────┐        ║
@@ -151,7 +157,7 @@ form of interface discipline that survives a hackathon deadline.
  t+0.016  Detection lat/lon = bus position + 11.4 m @ 118.4° + lateral offset.
  t+0.018  Map-match → osm:way/23847561:3, offset 127 m, ward bbmp:150.
  t+0.021  Severity from physical area, not confidence → 0.44, band "medium".
- t+0.024  Crop written, face-blur pass (no faces), SHA-256 computed.
+ t+0.024  Crop written, SHA-256 computed.
  t+0.026  Observation enqueued. Queue depth 7.
  t+3.400  Uplink: severity+age ranked it first. 1.9 KB JSON + 46 KB JPEG.
  t+3.9    Ingest validates, verifies hash, writes to hypertable.
@@ -176,7 +182,9 @@ fixed.**
 |---|---|---|
 | Cellular dropout | Silent data loss | SQLite spool, store-and-forward, QoS 1 |
 | One bad camera | Persistent false positives from one device | Per-device reliability weight in fusion; distinct-device corroboration |
-| Thermal throttling on a bus roof | Silently reduced FPS, quiet coverage loss | `inference_fps` + `temp_c` in telemetry; fleet-health panel |
+| Thermal throttling of a phone behind a sunlit windscreen | Silently reduced FPS, quiet coverage loss | `inference_fps` + `temp_c` in telemetry; fleet-health panel; measured under soak in [`11`](11-hardware-benchmark.md) |
+| A camera phone drops off the local Wi-Fi | That camera's classes silently uninspected | Edge keeps running on the remaining streams; the camera leaves `cameras_online` and its classes leave `inspected_for`, so no false negative evidence |
+| Camera/edge clocks disagree | Every detection misplaced by metres at speed | Capture-time stamping + offset handshake, ≤ 20 ms ([`03`](03-cv-pipeline.md#on-bus-topology)) |
 | Bus stop dwell | Every stop reads as a traffic jam | `dwell_excluded_seconds` excluded from congestion maths |
 | Occluded pass behind a truck | Counted as a clean inspection; false "missing" | `assessable_fraction` gates negative evidence |
 | GNSS multipath under a flyover | Detections snap to the wrong road | Map-matching with an HMM over the road graph; accuracy-weighted fusion |
@@ -187,7 +195,9 @@ fixed.**
 
 | Layer | Choice | Why this and not the obvious alternative |
 |---|---|---|
-| Edge inference | **ONNX Runtime** + swappable EP | The model must run on Orin, Pi+Hailo and Android from *one* artefact. Framework-native checkpoints would fork the model three ways and destroy the benchmark comparison. |
+| Edge platform | **Android phones** — 2 camera phones → 1 edge phone | Self-contained (camera, GNSS, IMU, modem, battery), no wiring or enclosure, cheap, swappable in two minutes. Dedicated boards are compared *after* the MVP ([`11`](11-hardware-benchmark.md)). |
+| Edge app | **Kotlin**, native Android, one APK with Camera and Edge roles | Direct access to CameraX, the hardware H.264 encoder/decoder and the NPU. Cross-platform frameworks reach all three through plugins, which is where real-time CV gets slow and fiddly. |
+| Edge inference | **ONNX Runtime Android** + swappable EP (NNAPI, CPU) | One portable artefact: the same file runs on the phone now and on any dedicated board we compare later, so that comparison is one model on different hardware, not different models. |
 | Detector | RT-DETR / D-FINE (Apache-2.0) | Ultralytics YOLO is AGPL-3.0 — a poor fit for government deployment. Prototype on YOLO, ship on Apache. See [`03`](03-cv-pipeline.md#model-licensing). |
 | Tracker | **ByteTrack** | No appearance model, so no second network on the edge budget. Robust to the low-confidence detections a moving bus produces. |
 | Uplink | **MQTT** | Designed for exactly this: intermittent cellular, small messages, QoS tiers, retained state. HTTP polling from 6,400 buses is not a plan. |
@@ -201,13 +211,16 @@ fixed.**
 ## What runs where, on demo day
 
 ```
-  laptop / Orin                  laptop (docker)              browser
+  3 phones (APK)                 laptop (docker)              browser
  ┌────────────────┐            ┌──────────────────┐        ┌───────────┐
- │ cv-pipeline    │ ── MQTT ─▶ │ EMQX             │        │ frontend  │
- │ --source       │            │ backend (uvicorn)│ ── WS ─▶│ :5173     │
- │ bengaluru.mp4  │            │ postgres+timescale│        │           │
- └────────────────┘            │ redis · minio    │        └───────────┘
-                               └──────────────────┘
+ │ front + rear   │            │ EMQX             │        │ frontend  │
+ │ camera phones  │            │ backend (uvicorn)│ ── WS ─▶│ :5173     │
+ │   │ local wifi │            │ postgres+timescale│        │           │
+ │   ▼            │ ── MQTT ─▶ │ redis · minio    │        └───────────┘
+ │ edge phone     │            └──────────────────┘
+ └────────────────┘
+ no bus on stage? the camera phones play recorded Bengaluru footage as their source,
+                  or the edge phone reads file:// directly — same code path.
  fallback: ops/replay/replay.py --log bengaluru-mgroad.jsonl
            publishes the identical messages; the dashboard cannot tell.
 ```

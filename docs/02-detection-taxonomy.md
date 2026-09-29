@@ -28,6 +28,22 @@ statistic; a detection with an action is a work order. The problem statement ask
 | `pedestrian_risk` | Safety | Tracking + zone + time gate | Cluster size × exposure | high | 2 |
 | **Incidents** | Safety | Temporal kinematics | Per type | crit | 3 |
 
+<a id="mvp-status"></a>
+### What the edge app detects today (v0.3.0)
+
+All three are **prototype models** — public weights, not trained on Bengaluru roads, accuracy
+here unmeasured. They exist to make the pipeline real end to end; CV-Perception replaces them.
+
+| Detects | Model | How it is reported | Gap against the design above |
+|---|---|---|---|
+| `pothole` | YOLO11n (tahaUgan, HF) | `Observation`, bounding box | Box, not an instance mask; no ground area (needs IPM) |
+| `damaged_road` — longitudinal, transverse, alligator cracks | YOLOv8n on RDD2022 (dronefreak, HF; test mAP@50 58.8%) | `Observation` + `subclass` | Boxes, not **% distressed area per 10 m** |
+| Vehicles (car, two-wheeler, bus, truck, bicycle) + pedestrians | YOLO11n COCO (Ultralytics) + IoU tracker | Unique counts per camera per 30 s | **No auto-rickshaw class** (COCO lacks it); simple tracker can over-count fast oncoming traffic; counts not yet per road segment |
+
+Not yet: waterlogging, dividers, zebra crossings, signs, debris, open manholes, encroachment,
+pedestrian risk, incidents. (The pothole model also has a "sewage manhole" class; it finds
+manhole *covers*, not open manholes, so it is deliberately not reported.)
+
 `missing_*` classes are **never emitted by the edge.** They are conclusions the backend draws
 from repeated non-observation. See [Missing classes](#missing-classes).
 

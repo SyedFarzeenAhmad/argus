@@ -34,6 +34,11 @@
     },
     "camera_id": { "$ref": "common.schema.json#/$defs/CameraId" },
     "class_id": { "$ref": "common.schema.json#/$defs/DetectionClass" },
+    "subclass": {
+      "type": "string",
+      "description": "Added in 1.1.0. Finer type within class_id where the model provides one, e.g. longitudinal_crack | transverse_crack | alligator_crack for damaged_road.",
+      "examples": ["alligator_crack"]
+    },
     "captured_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
     "uplinked_at": {
       "$ref": "common.schema.json#/$defs/Timestamp",

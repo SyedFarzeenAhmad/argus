@@ -89,7 +89,7 @@
         "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Chain of custody. Recomputed on ingest." },
         "bytes": { "type": "integer", "minimum": 0 },
         "quality": { "$ref": "#/$defs/Confidence", "description": "sharpness x illumination x subject size. Picks the canonical crop during fusion." },
-        "faces_blurred": { "type": "boolean", "description": "MUST be true for any crop containing people. Enforced on-device." }
+        "faces_blurred": { "type": "boolean", "description": "Face blurring is deferred (docs/08). The MVP edge omits this field; its rules are set when blurring is built." }
       }
     },
     "ModelProvenance": {
